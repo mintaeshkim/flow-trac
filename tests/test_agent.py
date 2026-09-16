@@ -5,6 +5,7 @@ import torch.nn as nn
 
 from flow_trac.agent import FlowTRACAgent, FlowTRACConfig
 from flow_trac.data import Batch
+from flow_trac.train import Args
 
 
 class ConstantCritic(nn.Module):
@@ -104,6 +105,10 @@ def test_resampled_actor_remains_the_default():
 
     assert agent.cfg.actor_mode == "resampled"
     assert metrics["flow_actor/weighted_objective"] == 0.0
+
+
+def test_new_training_runs_default_to_weighted():
+    assert Args().actor_mode == "weighted"
 
 
 def test_invalid_actor_mode_is_rejected():

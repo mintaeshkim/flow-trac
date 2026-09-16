@@ -60,7 +60,7 @@ class Args:
     lambda_: Annotated[float, tyro.conf.arg(name="lambda")] = 1.0
     num_value_samples: int = 32
     actor_num_candidates: int = 32
-    actor_mode: Literal["resampled", "weighted"] = "resampled"
+    actor_mode: Literal["resampled", "weighted"] = "weighted"
     flow_steps: int = 8
     policy_frequency: int = 2
     max_grad_norm: float = 10.0

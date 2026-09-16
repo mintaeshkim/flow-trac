@@ -45,8 +45,8 @@ Important options:
 
 - `--critic-warmup-steps`: critic-only updates after behavior pretraining.
 - `--lambda`: TRAC temperature used by both the Bellman target and actor weights.
-- `--actor-mode`: `resampled` (default, one target per state) or `weighted`
-  (flow matching over every weighted behavior candidate).
+- `--actor-mode`: `weighted` (default, flow matching over every weighted behavior
+  candidate) or `resampled` (one sampled target per state).
 - `--cql-alpha`: conservative critic regularization strength; set to zero to disable.
 - `--eval-policy`: `actor`, `prior`, or diagnostic `prior-resample` evaluation.
 - `--observation-key`: select one key from Dict observations; use `None` to flatten all keys.
@@ -55,9 +55,9 @@ TensorBoard logs are written below `runs/`. In particular, actor diagnostics inc
 ESS, maximum importance weight, weighted/prior Q, candidate diversity, flow loss,
 and path velocity norm.
 
-To train the actor with weighted flow matching while keeping the same frozen prior
-and TRAC critic target:
+Weighted flow matching is the default. The original resampled objective remains
+available explicitly:
 
 ```bash
-flow-trac --actor-mode weighted
+flow-trac --actor-mode resampled
 ```
