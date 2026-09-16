@@ -12,7 +12,7 @@ authors = [{name = "Mintae Kim"}]
 dependencies = [
     "gymnasium>=1.0",
     "minari>=0.5",
-    "numpy>=1.26,<2.0",
+    "numpy>=1.26",
     "tensorboard>=2.16",
     "torch>=2.2",
     "tqdm>=4.66",
