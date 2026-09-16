@@ -304,7 +304,7 @@ def train(args: Args) -> None:
     start_time = time.time()
     for step in trange(args.total_updates, desc="Flow-TRAC"):
         metrics = agent.update(offline_dataset.sample(args.batch_size), step)
-        if step % args.log_freq == 0:
+        if (step + 1) % args.log_freq == 0:
             metrics["charts/sps"] = (step + 1) / max(time.time() - start_time, 1e-6)
             _write_metrics(writer, metrics, step)
 
