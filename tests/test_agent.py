@@ -83,6 +83,34 @@ def test_resampling_metrics_have_expected_ranges():
     assert metrics["flow_actor/action_diversity"] >= 0.0
 
 
+def test_weighted_actor_uses_all_candidates():
+    torch.manual_seed(0)
+    agent = make_agent(actor_mode="weighted", actor_num_candidates=8)
+    agent.freeze_behavior()
+    batch = make_batch(batch_size=4)
+
+    metrics = agent.update(batch, global_step=0)
+
+    assert np.isfinite(metrics["flow_actor/flow_loss"])
+    assert metrics["flow_actor/weighted_objective"] == 1.0
+    assert 1.0 <= metrics["flow_actor/ess"] <= 8.0
+
+
+def test_resampled_actor_remains_the_default():
+    agent = make_agent()
+    agent.freeze_behavior()
+
+    metrics = agent.update(make_batch(batch_size=4), global_step=0)
+
+    assert agent.cfg.actor_mode == "resampled"
+    assert metrics["flow_actor/weighted_objective"] == 0.0
+
+
+def test_invalid_actor_mode_is_rejected():
+    with np.testing.assert_raises_regex(ValueError, "actor_mode"):
+        make_agent(actor_mode="invalid")
+
+
 def test_single_actor_candidate_has_finite_zero_diversity():
     agent = make_agent(actor_num_candidates=1)
     agent.freeze_behavior()

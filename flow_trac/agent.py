@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import gymnasium as gym
 import numpy as np
@@ -25,6 +25,7 @@ class FlowTRACConfig:
     lambda_: float = 1.0
     num_value_samples: int = 32
     actor_num_candidates: int = 32
+    actor_mode: Literal["resampled", "weighted"] = "resampled"
     flow_steps: int = 8
     critic_warmup_steps: int = 25_000
     policy_frequency: int = 2
@@ -50,6 +51,8 @@ class FlowTRACAgent:
             raise ValueError("lambda_ must be positive.")
         if config.num_value_samples < 1 or config.actor_num_candidates < 1:
             raise ValueError("Candidate counts must be positive.")
+        if config.actor_mode not in {"resampled", "weighted"}:
+            raise ValueError("actor_mode must be resampled or weighted.")
         if config.flow_steps < 1:
             raise ValueError("flow_steps must be positive.")
         if config.cql_alpha < 0.0 or config.cql_num_actions < 1:
@@ -273,10 +276,10 @@ class FlowTRACAgent:
         return metrics
 
     @torch.no_grad()
-    def _resampled_actor_targets(
+    def _actor_candidates_and_weights(
         self,
         obs: torch.Tensor,
-    ) -> tuple[torch.Tensor, dict[str, float]]:
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
         candidates = self.behavior.sample(
             obs,
             num_samples=self.cfg.actor_num_candidates,
@@ -288,12 +291,9 @@ class FlowTRACAgent:
             logits = logits - logits.mean(dim=1, keepdim=True)
             logits = logits.clamp(-self.cfg.advantage_clip, self.cfg.advantage_clip)
         weights = torch.softmax(logits, dim=1)
-        indices = torch.multinomial(weights, num_samples=1)
-        gather_indices = indices.unsqueeze(-1).expand(-1, 1, candidates.shape[-1])
-        targets = torch.gather(candidates, dim=1, index=gather_indices).squeeze(1)
         ess = 1.0 / weights.square().sum(dim=1)
         diversity = candidates.std(dim=1, unbiased=False).norm(dim=-1)
-        return targets, {
+        return candidates, weights, {
             "flow_actor/ess": float(ess.mean().item()),
             "flow_actor/ess_fraction": float((ess / self.cfg.actor_num_candidates).mean().item()),
             "flow_actor/weight_max": float(weights.max(dim=1).values.mean().item()),
@@ -302,9 +302,34 @@ class FlowTRACAgent:
             "flow_actor/action_diversity": float(diversity.mean().item()),
         }
 
+    @torch.no_grad()
+    def _resampled_actor_targets(
+        self,
+        obs: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        candidates, weights, metrics = self._actor_candidates_and_weights(obs)
+        indices = torch.multinomial(weights, num_samples=1)
+        gather_indices = indices.unsqueeze(-1).expand(-1, 1, candidates.shape[-1])
+        targets = torch.gather(candidates, dim=1, index=gather_indices).squeeze(1)
+        return targets, metrics
+
     def _update_actor(self, obs: torch.Tensor) -> dict[str, float]:
-        target_actions, metrics = self._resampled_actor_targets(obs)
-        result = self.actor.flow_matching_loss(obs, target_actions)
+        if self.cfg.actor_mode == "resampled":
+            target_actions, metrics = self._resampled_actor_targets(obs)
+            result = self.actor.flow_matching_loss(obs, target_actions)
+        else:
+            candidates, weights, metrics = self._actor_candidates_and_weights(obs)
+            batch_size, num_candidates, action_dim = candidates.shape
+            repeated_obs = (
+                obs[:, None, :]
+                .expand(batch_size, num_candidates, obs.shape[-1])
+                .reshape(batch_size * num_candidates, obs.shape[-1])
+            )
+            result = self.actor.flow_matching_loss(
+                repeated_obs,
+                candidates.reshape(batch_size * num_candidates, action_dim),
+                sample_weight=weights.reshape(-1),
+            )
         self.actor_optimizer.zero_grad()
         result.loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.cfg.max_grad_norm)
@@ -316,6 +341,7 @@ class FlowTRACAgent:
                 "flow_actor/path_velocity_norm": float(result.velocity_norm.item()),
                 "flow_actor/target_latent_norm": float(result.latent_norm.item()),
                 "flow_actor/grad_norm": float(grad_norm),
+                "flow_actor/weighted_objective": float(self.cfg.actor_mode == "weighted"),
             }
         )
         return metrics

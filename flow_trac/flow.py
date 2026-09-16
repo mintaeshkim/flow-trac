@@ -93,16 +93,22 @@ class ConditionalFlow(nn.Module):
             target_velocity,
             reduction="none",
         ).mean(dim=-1)
+        velocity_norm = predicted_velocity.norm(dim=-1)
+        latent_norm = target_latent.norm(dim=-1)
         if sample_weight is None:
             loss = per_sample_loss.mean()
+            mean_velocity_norm = velocity_norm.mean()
+            mean_latent_norm = latent_norm.mean()
         else:
             weight = sample_weight.reshape(-1)
             weight = weight / weight.sum().clamp_min(1e-8)
             loss = (weight * per_sample_loss).sum()
+            mean_velocity_norm = (weight * velocity_norm).sum()
+            mean_latent_norm = (weight * latent_norm).sum()
         return FlowLoss(
             loss=loss,
-            velocity_norm=predicted_velocity.norm(dim=-1).mean().detach(),
-            latent_norm=target_latent.norm(dim=-1).mean().detach(),
+            velocity_norm=mean_velocity_norm.detach(),
+            latent_norm=mean_latent_norm.detach(),
         )
 
     @torch.no_grad()

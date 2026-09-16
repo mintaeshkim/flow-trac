@@ -5,7 +5,7 @@ import os
 import random
 import time
 from dataclasses import asdict, dataclass
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import gymnasium as gym
 import minari
@@ -60,6 +60,7 @@ class Args:
     lambda_: Annotated[float, tyro.conf.arg(name="lambda")] = 1.0
     num_value_samples: int = 32
     actor_num_candidates: int = 32
+    actor_mode: Literal["resampled", "weighted"] = "resampled"
     flow_steps: int = 8
     policy_frequency: int = 2
     max_grad_norm: float = 10.0
@@ -247,6 +248,7 @@ def train(args: Args) -> None:
         lambda_=args.lambda_,
         num_value_samples=args.num_value_samples,
         actor_num_candidates=args.actor_num_candidates,
+        actor_mode=args.actor_mode,
         flow_steps=args.flow_steps,
         critic_warmup_steps=args.critic_warmup_steps,
         policy_frequency=args.policy_frequency,
