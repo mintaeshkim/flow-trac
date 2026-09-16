@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flow-trac"
+version = "0.1.0"
+description = "Flow matching for behavior-prior-tilted offline reinforcement learning"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+authors = [{name = "Mintae Kim"}]
+dependencies = [
+    "gymnasium>=1.0",
+    "minari>=0.5",
+    "numpy>=1.26,<2.0",
+    "tensorboard>=2.16",
+    "torch>=2.2",
+    "tqdm>=4.66",
+    "tyro>=0.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.1",
+    "ruff>=0.3",
+]
+
+[project.scripts]
+flow-trac = "flow_trac.train:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["flow_trac*"]
+
+[tool.ruff]
+line-length = 100
+lint.select = ["E", "F", "I"]
+lint.ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
