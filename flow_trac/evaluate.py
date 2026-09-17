@@ -24,6 +24,7 @@ class Args:
     policy: str | None = None
     deterministic: bool | None = None
     prior_num_candidates: int | None = None
+    flow_steps: int | None = None
     cuda: bool = True
     video_dir: str | None = None
     num_videos: int = 1
@@ -39,6 +40,8 @@ def run(args: Args) -> dict[str, float]:
         raise ValueError("num_episodes must be positive.")
     if not 0 <= args.num_videos <= args.num_episodes:
         raise ValueError("num_videos must be between zero and num_episodes.")
+    if args.flow_steps is not None and args.flow_steps < 1:
+        raise ValueError("flow_steps must be positive.")
 
     device = torch.device("cuda" if args.cuda and torch.cuda.is_available() else "cpu")
     checkpoint_path = Path(args.checkpoint).expanduser().resolve()
@@ -96,6 +99,8 @@ def run(args: Args) -> dict[str, float]:
     )
 
     config = FlowTRACConfig(**checkpoint["config"])
+    if args.flow_steps is not None:
+        config.flow_steps = args.flow_steps
     agent = FlowTRACAgent(env.observation_space, action_space, config, device)
     agent.load_state_dict(checkpoint["agent"])
     metrics = evaluate(
@@ -118,6 +123,7 @@ def run(args: Args) -> dict[str, float]:
         "num_episodes": args.num_episodes,
         "policy": policy,
         "deterministic": deterministic,
+        "flow_steps": config.flow_steps,
         **metrics,
     }
     if video_dir is not None:

@@ -48,7 +48,10 @@ Important options:
 - `--actor-mode`: `weighted` (default, flow matching over every weighted behavior
   candidate) or `resampled` (one sampled target per state).
 - `--cql-alpha`: conservative critic regularization strength; set to zero to disable.
+- `--no-cql-include-uniform`: use only frozen behavior-flow candidates in CQL.
+- `--no-actor-updates`: train only the frozen behavior flow and critics for diagnostics.
 - `--eval-policy`: `actor`, `prior`, or diagnostic `prior-resample` evaluation.
+- `flow-trac-eval --flow-steps N`: override ODE steps when comparing a saved checkpoint.
 - `--observation-key`: select one key from Dict observations; use `None` to flatten all keys.
 
 TensorBoard logs are written below `runs/`. In particular, actor diagnostics include

@@ -97,6 +97,41 @@ def test_weighted_actor_uses_all_candidates():
     assert 1.0 <= metrics["flow_actor/ess"] <= 8.0
 
 
+def test_actor_updates_can_be_disabled():
+    torch.manual_seed(0)
+    agent = make_agent(actor_updates=False)
+    agent.freeze_behavior()
+    actor_parameters = {
+        name: parameter.detach().clone() for name, parameter in agent.actor.named_parameters()
+    }
+
+    metrics = agent.update(make_batch(batch_size=4), global_step=100_000)
+
+    assert metrics["warmup/actor_enabled"] == 0.0
+    assert "flow_actor/flow_loss" not in metrics
+    for name, parameter in agent.actor.named_parameters():
+        torch.testing.assert_close(parameter, actor_parameters[name], rtol=0, atol=0)
+
+
+def test_cql_can_use_behavior_candidates_only(monkeypatch):
+    agent = make_agent(cql_alpha=0.1, cql_num_actions=3, cql_include_uniform=False)
+    agent.freeze_behavior()
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("uniform actions must not be sampled")
+
+    monkeypatch.setattr(agent.behavior.action_transform, "uniform", fail_if_called)
+    batch = make_batch(batch_size=4)
+    loss, metrics = agent._cql_loss(
+        batch.observations,
+        agent.critic_1(batch.observations, batch.actions),
+        agent.critic_2(batch.observations, batch.actions),
+    )
+
+    assert torch.isfinite(loss)
+    assert np.isfinite(metrics["critic/cql_loss"])
+
+
 def test_resampled_actor_remains_the_default():
     agent = make_agent()
     agent.freeze_behavior()

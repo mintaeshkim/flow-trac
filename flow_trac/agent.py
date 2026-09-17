@@ -28,11 +28,13 @@ class FlowTRACConfig:
     actor_mode: Literal["resampled", "weighted"] = "resampled"
     flow_steps: int = 8
     critic_warmup_steps: int = 25_000
+    actor_updates: bool = True
     policy_frequency: int = 2
     max_grad_norm: float = 10.0
     cql_alpha: float = 0.0
     cql_num_actions: int = 16
     cql_temperature: float = 1.0
+    cql_include_uniform: bool = True
     target_q_clip_min: float | None = None
     target_q_clip_max: float | None = None
     actor_ema_decay: float = 0.995
@@ -199,11 +201,13 @@ class FlowTRACAgent:
                 num_samples=self.cfg.cql_num_actions,
                 num_steps=self.cfg.flow_steps,
             )
-            uniform_actions = self.behavior.action_transform.uniform(
-                prior_actions.shape,
-                obs.device,
-            )
-            candidate_actions = torch.cat((prior_actions, uniform_actions), dim=1)
+            candidate_actions = prior_actions
+            if self.cfg.cql_include_uniform:
+                uniform_actions = self.behavior.action_transform.uniform(
+                    prior_actions.shape,
+                    obs.device,
+                )
+                candidate_actions = torch.cat((candidate_actions, uniform_actions), dim=1)
 
         batch_size, num_candidates, action_dim = candidate_actions.shape
         repeated_obs = (
@@ -356,7 +360,7 @@ class FlowTRACAgent:
         if not self.behavior_frozen:
             raise RuntimeError("Call freeze_behavior() before critic training.")
         metrics = self._update_critic(batch)
-        actor_enabled = global_step >= self.cfg.critic_warmup_steps
+        actor_enabled = self.cfg.actor_updates and global_step >= self.cfg.critic_warmup_steps
         metrics["warmup/actor_enabled"] = float(actor_enabled)
         if actor_enabled and (global_step + 1) % self.cfg.policy_frequency == 0:
             metrics.update(self._update_actor(batch.observations))

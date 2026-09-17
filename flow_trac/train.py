@@ -49,6 +49,7 @@ class Args:
     total_updates: int = 1_000_000
     batch_size: int = 256
     critic_warmup_steps: int = 25_000
+    actor_updates: bool = True
 
     # Flow-TRAC.
     hidden_dim: int = 256
@@ -67,6 +68,7 @@ class Args:
     cql_alpha: float = 1.0
     cql_num_actions: int = 16
     cql_temperature: float = 1.0
+    cql_include_uniform: bool = True
     target_q_clip_min: float | None = 0.0
     target_q_clip_max: float | None = 100.0
     actor_ema_decay: float = 0.995
@@ -251,11 +253,13 @@ def train(args: Args) -> None:
         actor_mode=args.actor_mode,
         flow_steps=args.flow_steps,
         critic_warmup_steps=args.critic_warmup_steps,
+        actor_updates=args.actor_updates,
         policy_frequency=args.policy_frequency,
         max_grad_norm=args.max_grad_norm,
         cql_alpha=args.cql_alpha,
         cql_num_actions=args.cql_num_actions,
         cql_temperature=args.cql_temperature,
+        cql_include_uniform=args.cql_include_uniform,
         target_q_clip_min=args.target_q_clip_min,
         target_q_clip_max=args.target_q_clip_max,
         actor_ema_decay=args.actor_ema_decay,
