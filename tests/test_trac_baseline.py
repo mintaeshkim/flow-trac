@@ -1,12 +1,13 @@
+import importlib
 from types import SimpleNamespace
 
 import gymnasium as gym
 import numpy as np
 import torch
 
-from trac.agents.trac import TRACAgent, TRACConfig
-from trac.train.train_kitchen import Args
-from trac.utils.buffers import ReplayBuffer
+from trac.agent import TRACAgent, TRACConfig
+from trac.buffer import ReplayBuffer
+from trac.train import Args
 
 
 def make_env_spec():
@@ -87,3 +88,9 @@ def test_kitchen_defaults_match_reference_run():
     assert args.actor_start_steps == 50_000
     assert args.use_actor_ema is True
     assert args.n_step == 1
+
+
+def test_legacy_checkpoint_module_alias():
+    legacy_agent = importlib.import_module("trac.agents.trac.agent")
+
+    assert legacy_agent.TRACConfig is TRACConfig

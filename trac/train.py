@@ -1,19 +1,23 @@
-# trac/train/train_kitchen.py
+from __future__ import annotations
+
+import json
 import os
+import random
 import time
 from dataclasses import asdict, dataclass
-from typing import Any, Optional
+from typing import Any
 
 import gymnasium as gym
 import minari
 import numpy as np
 import torch
 import tyro
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange
 
-from trac.agents.trac import TRACAgent, TRACConfig
-from trac.utils.buffers import ReplayBuffer
-from trac.utils.data_utils import (
+from trac.agent import TRACAgent, TRACConfig
+from trac.buffer import ReplayBuffer
+from trac.data import (
     compute_obs_mean_std,
     make_n_step_transitions,
     minari_dataset_to_transitions,
@@ -22,12 +26,7 @@ from trac.utils.data_utils import (
     validate_dataset_shapes,
     wrap_obs_normalization,
 )
-from trac.utils.obs_utils import flatten_env
-from trac.utils.train_utils import (
-    make_tensorboard_writer,
-    save_config_txt,
-    set_seed,
-)
+from trac.observations import flatten_env
 
 
 @dataclass
@@ -50,7 +49,7 @@ class Args:
 
     # Offline training
     total_updates: int = 1_000_000
-    buffer_size: Optional[int] = None
+    buffer_size: int | None = None
     batch_size: int = 256
     n_step: int = 1
 
@@ -66,11 +65,11 @@ class Args:
     policy_frequency: int = 2
     max_grad_norm: float = 10.0
     prior_pretrain_steps: int = 50_000
-    prior_update_steps: Optional[int] = 50_000
+    prior_update_steps: int | None = 50_000
     actor_start_steps: int = 50_000
     actor_warm_start_from_prior: bool = True
-    target_q_clip_min: Optional[float] = 0.0
-    target_q_clip_max: Optional[float] = 100.0
+    target_q_clip_min: float | None = 0.0
+    target_q_clip_max: float | None = 100.0
     prior_type: str = "gaussian"
     prior_num_components: int = 5
     prior_log_std_min: float = -2.5
@@ -97,6 +96,31 @@ class Args:
     save_best_model: bool = True
     best_model_metric: str = "eval_episodic_return"
     checkpoints_path: str = "checkpoints"
+
+
+def set_seed(seed: int, deterministic: bool) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
+def make_tensorboard_writer(
+    dataset_name: str,
+    exp_name: str,
+    seed: int,
+) -> SummaryWriter:
+    run_name = f"{dataset_name.replace('/', '_')}__{exp_name}__{seed}__{int(time.time())}"
+    return SummaryWriter(f"runs/{run_name}")
+
+
+def save_config(args: Args, log_dir: str) -> None:
+    os.makedirs(log_dir, exist_ok=True)
+    with open(os.path.join(log_dir, "config.txt"), "w", encoding="utf-8") as file:
+        json.dump(asdict(args), file, indent=2, sort_keys=True, default=str)
+        file.write("\n")
 
 
 def make_kitchen_env(
@@ -267,7 +291,7 @@ def checkpoint_payload(
 ) -> dict[str, Any]:
     return {
         "agent": agent.state_dict(),
-        "trac_config": trac_cfg,
+        "trac_config": asdict(trac_cfg),
         "args": asdict(args),
         "obs_mean": obs_mean,
         "obs_std": obs_std,
@@ -289,8 +313,8 @@ def main(args: Args):
     if args.cql_temperature <= 0.0:
         raise ValueError("cql_temperature must be > 0.")
     set_seed(args.seed, args.torch_deterministic)
-    writer, run_name = make_tensorboard_writer(args.dataset_name, args.exp_name, args.seed)
-    save_config_txt(args, writer.log_dir)
+    writer = make_tensorboard_writer(args.dataset_name, args.exp_name, args.seed)
+    save_config(args, writer.log_dir)
     device = torch.device("cuda" if args.cuda and torch.cuda.is_available() else "cpu")
 
     print(f"Loading Minari Kitchen dataset: {args.dataset_name}")

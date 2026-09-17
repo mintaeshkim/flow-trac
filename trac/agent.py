@@ -1,7 +1,6 @@
-# trac/agents/trac/agent.py
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 import gymnasium as gym
 import numpy as np
@@ -9,9 +8,9 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
-from trac.agents.trac.actor import Actor
-from trac.agents.trac.critic import Critic
-from trac.agents.trac.gmm_prior import GMMBehaviorPrior
+from trac.actor import Actor
+from trac.gmm_prior import GMMBehaviorPrior
+from trac.models import Critic
 
 
 @dataclass
@@ -131,7 +130,7 @@ class TRACAgent:
         include_det: bool = True,
         score_mode: str = "energy",
         return_info: bool = False,
-    ) -> np.ndarray | tuple[np.ndarray, Dict[str, float]]:
+    ) -> np.ndarray | tuple[np.ndarray, dict[str, float]]:
         """
         Implicit policy improvement by choosing among behavior-prior actions.
 
@@ -274,7 +273,7 @@ class TRACAgent:
     def _target_candidate_actions(
         self,
         next_obs: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, Dict[str, float]]:
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
         batch_size = next_obs.shape[0]
         num_candidates = max(1, int(self.cfg.num_value_samples))
         include_det = bool(self.cfg.target_include_prior_det)
@@ -334,7 +333,7 @@ class TRACAgent:
     def _target_value_with_info(
         self,
         next_obs: torch.Tensor,
-    ) -> tuple[torch.Tensor, Dict[str, float]]:
+    ) -> tuple[torch.Tensor, dict[str, float]]:
         batch_size = next_obs.shape[0]
         next_actions, _, info = self._target_candidate_actions(next_obs)
         num_candidates = next_actions.shape[1]
@@ -370,7 +369,7 @@ class TRACAgent:
         data_actions: torch.Tensor,
         q1_data: torch.Tensor,
         q2_data: torch.Tensor,
-    ) -> tuple[torch.Tensor, Dict[str, float]]:
+    ) -> tuple[torch.Tensor, dict[str, float]]:
         if self.cfg.cql_alpha <= 0.0:
             zero = torch.tensor(0.0, device=self.device)
             return zero, {
@@ -459,7 +458,7 @@ class TRACAgent:
         rewards: torch.Tensor,
         next_obs: torch.Tensor,
         dones: torch.Tensor,
-    ) -> tuple[torch.Tensor, Dict[str, float]]:
+    ) -> tuple[torch.Tensor, dict[str, float]]:
         with torch.no_grad():
             target_value, target_info = self._target_value_with_info(next_obs)
             target_gamma = self.cfg.gamma if self.cfg.target_gamma is None else self.cfg.target_gamma
@@ -503,7 +502,7 @@ class TRACAgent:
         self,
         obs: torch.Tensor,
         data_actions: torch.Tensor,
-    ) -> tuple[torch.Tensor, Dict[str, float]]:
+    ) -> tuple[torch.Tensor, dict[str, float]]:
         actions, log_pi = self.actor(obs, need_log_prob=True)
         prior_requires_grad = [param.requires_grad for param in self.behavior_prior.parameters()]
         for param in self.behavior_prior.parameters():
@@ -542,7 +541,7 @@ class TRACAgent:
         }
         return actor_loss, info
 
-    def update(self, replay_buffer, batch_size: int, global_step: int) -> Dict[str, Any]:
+    def update(self, replay_buffer, batch_size: int, global_step: int) -> dict[str, Any]:
         data = replay_buffer.sample(batch_size)
         obs = data.observations
         actions = data.actions
@@ -568,7 +567,7 @@ class TRACAgent:
         with torch.no_grad():
             prior_mu, prior_log_sigma = self.behavior_prior._params(obs)
 
-        metrics: Dict[str, Any] = {
+        metrics: dict[str, Any] = {
             "prior_loss": float(prior_loss.item()),
             "prior_grad_norm": float(prior_grad_norm),
             "prior/log_prob_data": float((-prior_loss).item()),
@@ -642,7 +641,7 @@ class TRACAgent:
 
         return metrics
 
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         return {
             "actor": self.actor.state_dict(),
             "actor_ema": self.actor_ema.state_dict() if self.actor_ema is not None else None,
@@ -658,7 +657,7 @@ class TRACAgent:
             "actor_warm_start_component": self.actor_warm_start_component,
         }
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
+    def load_state_dict(self, state_dict: dict[str, Any]):
         self.actor.load_state_dict(state_dict["actor"])
         if self.actor_ema is not None:
             actor_ema_state = state_dict.get("actor_ema", None)

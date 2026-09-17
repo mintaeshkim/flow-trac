@@ -1,9 +1,7 @@
-from typing import Dict
-
 import gymnasium as gym
 import numpy as np
 
-from trac.utils.obs_utils import flatten_observation_batch, select_observation_batch
+from trac.observations import flatten_observation_batch, select_observation_batch
 
 
 def minari_dataset_to_transitions(
@@ -11,7 +9,7 @@ def minari_dataset_to_transitions(
     observation_space: gym.spaces.Space | None = None,
     flatten_observations: bool = False,
     observation_key: str | tuple[str, ...] | list[str] | None = None,
-) -> Dict[str, np.ndarray]:
+) -> dict[str, np.ndarray]:
     observations, actions, rewards = [], [], []
     next_observations, terminations, truncations = [], [], []
 

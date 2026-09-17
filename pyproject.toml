@@ -31,7 +31,7 @@ video = [
 [project.scripts]
 flow-trac = "flow_trac.train:cli"
 flow-trac-eval = "flow_trac.evaluate:cli"
-trac-kitchen = "trac.train.train_kitchen:cli"
+trac-kitchen = "trac.train:cli"
 
 [tool.setuptools.packages.find]
 where = ["."]

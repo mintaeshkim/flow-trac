@@ -70,6 +70,10 @@ separate from Flow-TRAC so the two implementations can be compared directly.
 The defaults reproduce the reference Kitchen run, including CQL `alpha=0.1`;
 Flow-TRAC keeps its own CQL default unchanged.
 
+Both implementations use a flat package layout: `agent.py`, policy/model
+modules, data helpers, and `train.py`. Legacy nested TRAC checkpoints remain
+loadable after the layout change.
+
 ```bash
 trac-kitchen --cuda
 ```
