@@ -62,6 +62,8 @@ class ConditionalFlow(nn.Module):
         self.action_dim = action_dim
         self.action_transform = ActionTransform(action_low, action_high)
         self.velocity = mlp(obs_dim + action_dim + 3, hidden_dim, action_dim)
+        self.mean_head = mlp(obs_dim, hidden_dim, action_dim)
+        self.use_mean_head = True
 
     def forward(
         self,
@@ -111,6 +113,17 @@ class ConditionalFlow(nn.Module):
             latent_norm=mean_latent_norm.detach(),
         )
 
+    def mean_action(self, obs: torch.Tensor) -> torch.Tensor:
+        """Deterministic conditional-mean readout for closed-loop control."""
+        return self.action_transform.from_latent(self.mean_head(obs.float()))
+
+    def mean_action_loss(
+        self,
+        obs: torch.Tensor,
+        target_action: torch.Tensor,
+    ) -> torch.Tensor:
+        return F.mse_loss(self.mean_action(obs), target_action)
+
     @torch.no_grad()
     def sample(
         self,
@@ -130,6 +143,9 @@ class ConditionalFlow(nn.Module):
             .expand(batch_size, num_samples, obs_dim)
             .reshape(batch_size * num_samples, obs_dim)
         )
+        if deterministic and self.use_mean_head:
+            action = self.mean_action(obs)
+            return action[:, None, :].expand(batch_size, num_samples, self.action_dim)
         if deterministic:
             latent = torch.zeros(
                 (batch_size * num_samples, self.action_dim),

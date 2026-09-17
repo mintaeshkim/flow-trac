@@ -69,6 +69,7 @@ def test_behavior_is_unchanged_after_freeze_and_rl_update():
 
     assert "flow_actor/ess_fraction" in metrics
     assert "flow_actor/flow_loss" in metrics
+    assert "flow_actor/mean_action_loss" in metrics
     for name, parameter in agent.behavior.named_parameters():
         assert parameter.requires_grad is False
         torch.testing.assert_close(parameter, frozen_parameters[name], rtol=0, atol=0)
@@ -111,6 +112,23 @@ def test_actor_updates_can_be_disabled():
     assert "flow_actor/flow_loss" not in metrics
     for name, parameter in agent.actor.named_parameters():
         torch.testing.assert_close(parameter, actor_parameters[name], rtol=0, atol=0)
+
+
+def test_legacy_flow_checkpoint_uses_zero_noise_readout():
+    agent = make_agent()
+    agent.freeze_behavior()
+    state = agent.state_dict()
+    for key in ("behavior", "actor", "actor_ema"):
+        state[key] = {
+            name: value for name, value in state[key].items() if not name.startswith("mean_head.")
+        }
+
+    restored = make_agent()
+    restored.load_state_dict(state)
+
+    assert restored.behavior.use_mean_head is False
+    assert restored.actor.use_mean_head is False
+    assert restored.actor_ema.use_mean_head is False
 
 
 def test_cql_can_use_behavior_candidates_only(monkeypatch):

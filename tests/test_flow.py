@@ -49,3 +49,42 @@ def test_flow_matching_loss_updates_parameters():
     optimizer.step()
     assert torch.isfinite(loss)
     assert any(not torch.equal(old, new) for old, new in zip(before, flow.parameters()))
+
+
+def test_deterministic_samples_use_mean_action_head():
+    flow = ConditionalFlow(
+        obs_dim=3,
+        action_dim=2,
+        action_low=-np.ones(2, dtype=np.float32),
+        action_high=np.ones(2, dtype=np.float32),
+        hidden_dim=16,
+    )
+    observations = torch.randn(5, 3)
+
+    expected = flow.mean_action(observations)
+    samples = flow.sample(observations, num_samples=3, num_steps=2, deterministic=True)
+
+    torch.testing.assert_close(samples, expected[:, None, :].expand(-1, 3, -1))
+
+
+def test_mean_action_loss_trains_deterministic_readout():
+    torch.manual_seed(0)
+    flow = ConditionalFlow(
+        obs_dim=3,
+        action_dim=2,
+        action_low=-np.ones(2, dtype=np.float32),
+        action_high=np.ones(2, dtype=np.float32),
+        hidden_dim=16,
+    )
+    observations = torch.randn(32, 3)
+    actions = torch.tanh(observations[:, :2])
+    optimizer = torch.optim.Adam(flow.mean_head.parameters(), lr=3e-3)
+    initial = flow.mean_action_loss(observations, actions).item()
+
+    for _ in range(100):
+        loss = flow.mean_action_loss(observations, actions)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    assert flow.mean_action_loss(observations, actions).item() < initial * 0.2

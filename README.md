@@ -9,6 +9,10 @@ The implementation keeps two independent flows:
 - a Q-tilted flow actor, trained with either resampled or weighted flow matching
   from frozen behavior-flow candidates weighted by `exp(Q(s, a) / lambda)`.
 
+Each flow also learns a deterministic conditional-mean readout. Stochastic ODE
+samples still define the TRAC base measure; the mean readout is used only when a
+deterministic closed-loop action is requested.
+
 Twin target critics use the same frozen behavior flow as the base measure in the
 TRAC Bellman backup. No flow likelihood or CNF divergence is required.
 

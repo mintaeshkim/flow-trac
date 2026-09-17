@@ -39,6 +39,7 @@ class FlowTRACConfig:
     target_q_clip_max: float | None = None
     actor_ema_decay: float = 0.995
     advantage_clip: float | None = None
+    deterministic_loss_coef: float = 1.0
 
 
 class FlowTRACAgent:
@@ -63,6 +64,8 @@ class FlowTRACAgent:
             raise ValueError("cql_temperature must be positive.")
         if not 0.0 <= config.actor_ema_decay < 1.0:
             raise ValueError("actor_ema_decay must be in [0, 1).")
+        if config.deterministic_loss_coef < 0.0:
+            raise ValueError("deterministic_loss_coef must be non-negative.")
 
         self.cfg = config
         self.device = device
@@ -107,14 +110,18 @@ class FlowTRACAgent:
         if self.behavior_frozen or self.behavior_optimizer is None:
             raise RuntimeError("The behavior flow is already frozen.")
         result = self.behavior.flow_matching_loss(batch.observations, batch.actions)
+        mean_action_loss = self.behavior.mean_action_loss(batch.observations, batch.actions)
+        loss = result.loss + self.cfg.deterministic_loss_coef * mean_action_loss
         self.behavior_optimizer.zero_grad()
-        result.loss.backward()
+        loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(
             self.behavior.parameters(), self.cfg.max_grad_norm
         )
         self.behavior_optimizer.step()
         return {
+            "behavior/loss": float(loss.item()),
             "behavior/flow_loss": float(result.loss.item()),
+            "behavior/mean_action_loss": float(mean_action_loss.item()),
             "behavior/path_velocity_norm": float(result.velocity_norm.item()),
             "behavior/target_latent_norm": float(result.latent_norm.item()),
             "behavior/grad_norm": float(grad_norm),
@@ -123,12 +130,14 @@ class FlowTRACAgent:
     @torch.no_grad()
     def behavior_validation_metrics(self, batch: Batch) -> dict[str, float]:
         result = self.behavior.flow_matching_loss(batch.observations, batch.actions)
+        mean_action_loss = self.behavior.mean_action_loss(batch.observations, batch.actions)
         generated = self.behavior.sample(
             batch.observations,
             num_steps=self.cfg.flow_steps,
         ).squeeze(1)
         return {
             "behavior/validation_flow_loss": float(result.loss.item()),
+            "behavior/validation_mean_action_loss": float(mean_action_loss.item()),
             "behavior/generated_action_mean": float(generated.mean().item()),
             "behavior/generated_action_std": float(generated.std().item()),
             "behavior/data_action_mean": float(batch.actions.mean().item()),
@@ -139,6 +148,8 @@ class FlowTRACAgent:
         if initialize_actor:
             self.actor.load_state_dict(self.behavior.state_dict())
             self.actor_ema.load_state_dict(self.behavior.state_dict())
+            self.actor.use_mean_head = self.behavior.use_mean_head
+            self.actor_ema.use_mean_head = self.behavior.use_mean_head
             self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.cfg.actor_lr)
         self.behavior.eval()
         for parameter in self.behavior.parameters():
@@ -321,6 +332,7 @@ class FlowTRACAgent:
         if self.cfg.actor_mode == "resampled":
             target_actions, metrics = self._resampled_actor_targets(obs)
             result = self.actor.flow_matching_loss(obs, target_actions)
+            mean_target = target_actions
         else:
             candidates, weights, metrics = self._actor_candidates_and_weights(obs)
             batch_size, num_candidates, action_dim = candidates.shape
@@ -334,14 +346,19 @@ class FlowTRACAgent:
                 candidates.reshape(batch_size * num_candidates, action_dim),
                 sample_weight=weights.reshape(-1),
             )
+            mean_target = (weights.unsqueeze(-1) * candidates).sum(dim=1)
+        mean_action_loss = self.actor.mean_action_loss(obs, mean_target)
+        loss = result.loss + self.cfg.deterministic_loss_coef * mean_action_loss
         self.actor_optimizer.zero_grad()
-        result.loss.backward()
+        loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.cfg.max_grad_norm)
         self.actor_optimizer.step()
         self._update_actor_ema()
         metrics.update(
             {
+                "flow_actor/loss": float(loss.item()),
                 "flow_actor/flow_loss": float(result.loss.item()),
+                "flow_actor/mean_action_loss": float(mean_action_loss.item()),
                 "flow_actor/path_velocity_norm": float(result.velocity_norm.item()),
                 "flow_actor/target_latent_norm": float(result.latent_norm.item()),
                 "flow_actor/grad_norm": float(grad_norm),
@@ -447,14 +464,31 @@ class FlowTRACAgent:
         }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
-        self.behavior.load_state_dict(state["behavior"])
-        self.actor.load_state_dict(state["actor"])
-        self.actor_ema.load_state_dict(state["actor_ema"])
+        behavior_has_mean = self._load_flow_state(self.behavior, state["behavior"])
+        actor_has_mean = self._load_flow_state(self.actor, state["actor"])
+        actor_ema_has_mean = self._load_flow_state(self.actor_ema, state["actor_ema"])
+        self.behavior.use_mean_head = behavior_has_mean
+        self.actor.use_mean_head = actor_has_mean
+        self.actor_ema.use_mean_head = actor_ema_has_mean
         self.critic_1.load_state_dict(state["critic_1"])
         self.critic_2.load_state_dict(state["critic_2"])
         self.critic_1_target.load_state_dict(state["critic_1_target"])
         self.critic_2_target.load_state_dict(state["critic_2_target"])
         self.critic_optimizer.load_state_dict(state["critic_optimizer"])
-        self.actor_optimizer.load_state_dict(state["actor_optimizer"])
+        if actor_has_mean:
+            self.actor_optimizer.load_state_dict(state["actor_optimizer"])
         if state.get("behavior_frozen", True):
             self.freeze_behavior(initialize_actor=False)
+
+    @staticmethod
+    def _load_flow_state(flow: ConditionalFlow, state: dict[str, Any]) -> bool:
+        incompatible = flow.load_state_dict(state, strict=False)
+        missing = set(incompatible.missing_keys)
+        unexpected = set(incompatible.unexpected_keys)
+        mean_keys = {name for name in flow.state_dict() if name.startswith("mean_head.")}
+        if unexpected or missing - mean_keys:
+            raise RuntimeError(
+                f"Incompatible flow checkpoint: missing={sorted(missing)}, "
+                f"unexpected={sorted(unexpected)}"
+            )
+        return not missing
