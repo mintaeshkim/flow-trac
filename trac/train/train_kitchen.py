@@ -32,7 +32,7 @@ from trac.utils.train_utils import (
 
 @dataclass
 class Args:
-    exp_name: str = os.path.basename(__file__)[: -len(".py")]
+    exp_name: str = "train_trac_kitchen"
     seed: int = 10
     eval_seed: int = 42
     torch_deterministic: bool = False
@@ -60,7 +60,6 @@ class Args:
     tau: float = 5e-3
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
-    iql_value_lr: float = 3e-4
     prior_lr: float = 3e-4
     lambda_: float = 1.0
     num_value_samples: int = 32
@@ -81,12 +80,10 @@ class Args:
     actor_bc_coef: float = 0.0
     use_actor_ema: bool = True
     actor_ema_decay: float = 0.995
-    cql_alpha: float = 0.0
+    cql_alpha: float = 0.1
     cql_num_actions: int = 16
     cql_temperature: float = 1.0
     cql_include_prior_det: bool = True
-    critic_target: str = "trac"
-    iql_expectile: float = 0.7
 
     # Logging / evaluation
     log_freq: int = 1000
@@ -291,11 +288,6 @@ def main(args: Args):
         raise ValueError("cql_num_actions must be >= 1.")
     if args.cql_temperature <= 0.0:
         raise ValueError("cql_temperature must be > 0.")
-    if args.critic_target not in {"trac", "iql"}:
-        raise ValueError("critic_target must be one of {'trac', 'iql'}.")
-    if not 0.0 < args.iql_expectile < 1.0:
-        raise ValueError("iql_expectile must be in (0, 1).")
-
     set_seed(args.seed, args.torch_deterministic)
     writer, run_name = make_tensorboard_writer(args.dataset_name, args.exp_name, args.seed)
     save_config_txt(args, writer.log_dir)
@@ -375,7 +367,6 @@ def main(args: Args):
         hidden_dim=args.hidden_dim,
         actor_lr=args.actor_lr,
         critic_lr=args.critic_lr,
-        iql_value_lr=args.iql_value_lr,
         prior_lr=args.prior_lr,
         lambda_=args.lambda_,
         num_value_samples=args.num_value_samples,
@@ -400,8 +391,6 @@ def main(args: Args):
         cql_num_actions=args.cql_num_actions,
         cql_temperature=args.cql_temperature,
         cql_include_prior_det=args.cql_include_prior_det,
-        critic_target=args.critic_target,
-        iql_expectile=args.iql_expectile,
     )
     agent = TRACAgent(envs, trac_cfg, device)
 
@@ -440,9 +429,6 @@ def main(args: Args):
     writer.add_scalar("config/cql_num_actions", args.cql_num_actions, 0)
     writer.add_scalar("config/cql_temperature", args.cql_temperature, 0)
     writer.add_scalar("config/cql_include_prior_det", float(args.cql_include_prior_det), 0)
-    writer.add_text("config/critic_target", args.critic_target, 0)
-    writer.add_scalar("config/iql_expectile", args.iql_expectile, 0)
-    writer.add_scalar("config/iql_value_lr", args.iql_value_lr, 0)
 
     best_eval_metric = -float("inf")
     best_eval_step = -1

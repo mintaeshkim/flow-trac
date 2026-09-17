@@ -67,6 +67,8 @@ flow-trac --actor-mode resampled
 The original `offline_rl` Gaussian/GMM TRAC implementation is included as a
 self-contained `trac/` package. Its Kitchen defaults and update rules are kept
 separate from Flow-TRAC so the two implementations can be compared directly.
+The defaults reproduce the reference Kitchen run, including CQL `alpha=0.1`;
+Flow-TRAC keeps its own CQL default unchanged.
 
 ```bash
 trac-kitchen --cuda

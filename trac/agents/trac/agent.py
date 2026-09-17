@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from trac.agents.trac.actor import Actor
-from trac.agents.trac.critic import Critic, Value
+from trac.agents.trac.critic import Critic
 from trac.agents.trac.gmm_prior import GMMBehaviorPrior
 
 
@@ -22,7 +22,6 @@ class TRACConfig:
     hidden_dim: int = 256
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
-    iql_value_lr: float = 3e-4
     prior_lr: float = 3e-4
     lambda_: float = 1.0
     num_value_samples: int = 10
@@ -47,8 +46,6 @@ class TRACConfig:
     cql_num_actions: int = 16
     cql_temperature: float = 1.0
     cql_include_prior_det: bool = True
-    critic_target: str = "trac"
-    iql_expectile: float = 0.7
 
 
 class TRACAgent:
@@ -74,16 +71,6 @@ class TRACAgent:
             self.cfg.cql_temperature = 1.0
         if not hasattr(self.cfg, "cql_include_prior_det"):
             self.cfg.cql_include_prior_det = True
-        if not hasattr(self.cfg, "critic_target"):
-            self.cfg.critic_target = "trac"
-        if not hasattr(self.cfg, "iql_expectile"):
-            self.cfg.iql_expectile = 0.7
-        if not hasattr(self.cfg, "iql_value_lr"):
-            self.cfg.iql_value_lr = self.cfg.critic_lr
-        if self.cfg.critic_target not in {"trac", "iql"}:
-            raise ValueError("critic_target must be one of {'trac', 'iql'}.")
-        if not 0.0 < self.cfg.iql_expectile < 1.0:
-            raise ValueError("iql_expectile must be in (0, 1).")
 
         self.actor = Actor(envs, hidden_dim=self.cfg.hidden_dim).to(device)
         if not 0.0 <= self.cfg.actor_ema_decay < 1.0:
@@ -110,10 +97,6 @@ class TRACAgent:
         self.critic_2 = Critic(envs, hidden_dim=self.cfg.hidden_dim).to(device)
         self.critic_1_target = deepcopy(self.critic_1).to(device)
         self.critic_2_target = deepcopy(self.critic_2).to(device)
-        self.value = Value(envs, hidden_dim=self.cfg.hidden_dim).to(device)
-        self.value_target = deepcopy(self.value).to(device)
-        for param in self.value_target.parameters():
-            param.requires_grad_(False)
 
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=self.cfg.actor_lr)
         self.prior_optimizer = optim.Adam(self.behavior_prior.parameters(), lr=self.cfg.prior_lr)
@@ -121,7 +104,6 @@ class TRACAgent:
             list(self.critic_1.parameters()) + list(self.critic_2.parameters()),
             lr=self.cfg.critic_lr,
         )
-        self.value_optimizer = optim.Adam(self.value.parameters(), lr=self.cfg.iql_value_lr)
         self.actor_warm_started = False
         self.actor_warm_start_component = -1
 
@@ -243,11 +225,6 @@ class TRACAgent:
             target_param.data.copy_(
                 self.cfg.tau * param.data + (1.0 - self.cfg.tau) * target_param.data
             )
-        if self.cfg.critic_target == "iql":
-            for param, target_param in zip(self.value.parameters(), self.value_target.parameters()):
-                target_param.data.copy_(
-                    self.cfg.tau * param.data + (1.0 - self.cfg.tau) * target_param.data
-                )
 
     @torch.no_grad()
     def _sync_actor_ema(self):
@@ -387,38 +364,6 @@ class TRACAgent:
     def _target_value(self, next_obs: torch.Tensor) -> torch.Tensor:
         return self._target_value_with_info(next_obs)[0]
 
-    def _expectile_loss(
-        self,
-        diff: torch.Tensor,
-        expectile: float,
-    ) -> torch.Tensor:
-        weight = torch.where(diff > 0.0, expectile, 1.0 - expectile)
-        return (weight * diff.pow(2)).mean()
-
-    def _value_loss(
-        self,
-        obs: torch.Tensor,
-        actions: torch.Tensor,
-    ) -> tuple[torch.Tensor, Dict[str, float]]:
-        with torch.no_grad():
-            q1 = self.critic_1(obs, actions)
-            q2 = self.critic_2(obs, actions)
-            min_q = torch.min(q1, q2)
-
-        value = self.value(obs)
-        advantage = min_q - value
-        value_loss = self._expectile_loss(advantage, self.cfg.iql_expectile)
-        info = {
-            "value_loss": float(value_loss.item()),
-            "iql/value": float(value.mean().item()),
-            "iql/value_std": float(value.std().item()),
-            "iql/min_q_data": float(min_q.mean().item()),
-            "iql/advantage": float(advantage.mean().item()),
-            "iql/advantage_std": float(advantage.std().item()),
-            "iql/expectile": float(self.cfg.iql_expectile),
-        }
-        return value_loss, info
-
     def _cql_loss(
         self,
         obs: torch.Tensor,
@@ -516,20 +461,7 @@ class TRACAgent:
         dones: torch.Tensor,
     ) -> tuple[torch.Tensor, Dict[str, float]]:
         with torch.no_grad():
-            if self.cfg.critic_target == "iql":
-                target_value = self.value_target(next_obs)
-                target_info = {
-                    "critic_target/is_iql": 1.0,
-                    "critic_target/is_trac": 0.0,
-                }
-            else:
-                target_value, target_info = self._target_value_with_info(next_obs)
-                target_info.update(
-                    {
-                        "critic_target/is_iql": 0.0,
-                        "critic_target/is_trac": 1.0,
-                    }
-                )
+            target_value, target_info = self._target_value_with_info(next_obs)
             target_gamma = self.cfg.gamma if self.cfg.target_gamma is None else self.cfg.target_gamma
             unclipped_target_q = rewards + (1.0 - dones) * target_gamma * target_value
             target_q = unclipped_target_q
@@ -664,19 +596,6 @@ class TRACAgent:
         metrics["warmup/actor_warm_started_now"] = float(actor_warm_started_now)
         metrics["warmup/actor_warm_start_component"] = float(self.actor_warm_start_component)
 
-        value_grad_norm = torch.tensor(0.0, device=self.device)
-        if self.cfg.critic_target == "iql":
-            value_loss, value_info = self._value_loss(obs, actions)
-            self.value_optimizer.zero_grad()
-            value_loss.backward()
-            value_grad_norm = torch.nn.utils.clip_grad_norm_(
-                self.value.parameters(),
-                self.cfg.max_grad_norm,
-            )
-            self.value_optimizer.step()
-            metrics["value_grad_norm"] = float(value_grad_norm)
-            metrics.update(value_info)
-
         critic_loss, critic_info = self._critic_loss(obs, actions, rewards, next_obs, dones)
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
@@ -732,12 +651,9 @@ class TRACAgent:
             "critic_2": self.critic_2.state_dict(),
             "critic_1_target": self.critic_1_target.state_dict(),
             "critic_2_target": self.critic_2_target.state_dict(),
-            "value": self.value.state_dict(),
-            "value_target": self.value_target.state_dict(),
             "actor_optimizer": self.actor_optimizer.state_dict(),
             "prior_optimizer": self.prior_optimizer.state_dict(),
             "critic_optimizer": self.critic_optimizer.state_dict(),
-            "value_optimizer": self.value_optimizer.state_dict(),
             "actor_warm_started": self.actor_warm_started,
             "actor_warm_start_component": self.actor_warm_start_component,
         }
@@ -755,16 +671,8 @@ class TRACAgent:
         self.critic_2.load_state_dict(state_dict["critic_2"])
         self.critic_1_target.load_state_dict(state_dict["critic_1_target"])
         self.critic_2_target.load_state_dict(state_dict["critic_2_target"])
-        if "value" in state_dict:
-            self.value.load_state_dict(state_dict["value"])
-        if "value_target" in state_dict:
-            self.value_target.load_state_dict(state_dict["value_target"])
-        else:
-            self.value_target.load_state_dict(self.value.state_dict())
         self.actor_optimizer.load_state_dict(state_dict["actor_optimizer"])
         self.prior_optimizer.load_state_dict(state_dict["prior_optimizer"])
         self.critic_optimizer.load_state_dict(state_dict["critic_optimizer"])
-        if "value_optimizer" in state_dict:
-            self.value_optimizer.load_state_dict(state_dict["value_optimizer"])
         self.actor_warm_started = bool(state_dict.get("actor_warm_started", False))
         self.actor_warm_start_component = int(state_dict.get("actor_warm_start_component", -1))

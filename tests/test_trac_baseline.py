@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from trac.agents.trac import TRACAgent, TRACConfig
+from trac.train.train_kitchen import Args
 from trac.utils.buffers import ReplayBuffer
 
 
@@ -74,3 +75,15 @@ def test_reproduced_trac_pretrains_prior_then_warm_starts_actor():
     assert "critic_loss" in train_metrics
     assert "actor_loss" in train_metrics
     assert agent.actor_ema is not None
+    assert "value" not in agent.state_dict()
+
+
+def test_kitchen_defaults_match_reference_run():
+    args = Args()
+
+    assert args.exp_name == "train_trac_kitchen"
+    assert args.cql_alpha == 0.1
+    assert args.prior_pretrain_steps == 50_000
+    assert args.actor_start_steps == 50_000
+    assert args.use_actor_ema is True
+    assert args.n_step == 1
