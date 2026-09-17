@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import tyro
 from tqdm import trange
+
 from trac.agents.trac import TRACAgent, TRACConfig
 from trac.utils.buffers import ReplayBuffer
 from trac.utils.data_utils import (

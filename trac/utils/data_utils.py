@@ -2,6 +2,7 @@ from typing import Dict
 
 import gymnasium as gym
 import numpy as np
+
 from trac.utils.obs_utils import flatten_observation_batch, select_observation_batch
 
 

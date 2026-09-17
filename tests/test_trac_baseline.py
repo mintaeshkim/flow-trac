@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import gymnasium as gym
 import numpy as np
 import torch
+
 from trac.agents.trac import TRACAgent, TRACConfig
 from trac.utils.buffers import ReplayBuffer
 
