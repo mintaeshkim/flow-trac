@@ -67,7 +67,7 @@ def test_deterministic_samples_use_mean_action_head():
     torch.testing.assert_close(samples, expected[:, None, :].expand(-1, 3, -1))
 
 
-def test_mean_action_loss_trains_deterministic_readout():
+def test_readout_loss_trains_deterministic_mean():
     torch.manual_seed(0)
     flow = ConditionalFlow(
         obs_dim=3,
@@ -78,13 +78,13 @@ def test_mean_action_loss_trains_deterministic_readout():
     )
     observations = torch.randn(32, 3)
     actions = torch.tanh(observations[:, :2])
-    optimizer = torch.optim.Adam(flow.mean_head.parameters(), lr=3e-3)
-    initial = flow.mean_action_loss(observations, actions).item()
+    optimizer = torch.optim.Adam(flow.readout.parameters(), lr=3e-3)
+    initial = flow.mean_action_mse(observations, actions).item()
 
-    for _ in range(100):
-        loss = flow.mean_action_loss(observations, actions)
+    for _ in range(200):
+        loss = flow.readout_loss(observations, actions)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-    assert flow.mean_action_loss(observations, actions).item() < initial * 0.2
+    assert flow.mean_action_mse(observations, actions).item() < initial * 0.2

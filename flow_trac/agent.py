@@ -110,8 +110,9 @@ class FlowTRACAgent:
         if self.behavior_frozen or self.behavior_optimizer is None:
             raise RuntimeError("The behavior flow is already frozen.")
         result = self.behavior.flow_matching_loss(batch.observations, batch.actions)
-        mean_action_loss = self.behavior.mean_action_loss(batch.observations, batch.actions)
-        loss = result.loss + self.cfg.deterministic_loss_coef * mean_action_loss
+        readout_loss = self.behavior.readout_loss(batch.observations, batch.actions)
+        mean_action_mse = self.behavior.mean_action_mse(batch.observations, batch.actions)
+        loss = result.loss + self.cfg.deterministic_loss_coef * readout_loss
         self.behavior_optimizer.zero_grad()
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -121,7 +122,8 @@ class FlowTRACAgent:
         return {
             "behavior/loss": float(loss.item()),
             "behavior/flow_loss": float(result.loss.item()),
-            "behavior/mean_action_loss": float(mean_action_loss.item()),
+            "behavior/readout_loss": float(readout_loss.item()),
+            "behavior/mean_action_mse": float(mean_action_mse.item()),
             "behavior/path_velocity_norm": float(result.velocity_norm.item()),
             "behavior/target_latent_norm": float(result.latent_norm.item()),
             "behavior/grad_norm": float(grad_norm),
@@ -130,14 +132,16 @@ class FlowTRACAgent:
     @torch.no_grad()
     def behavior_validation_metrics(self, batch: Batch) -> dict[str, float]:
         result = self.behavior.flow_matching_loss(batch.observations, batch.actions)
-        mean_action_loss = self.behavior.mean_action_loss(batch.observations, batch.actions)
+        readout_loss = self.behavior.readout_loss(batch.observations, batch.actions)
+        mean_action_mse = self.behavior.mean_action_mse(batch.observations, batch.actions)
         generated = self.behavior.sample(
             batch.observations,
             num_steps=self.cfg.flow_steps,
         ).squeeze(1)
         return {
             "behavior/validation_flow_loss": float(result.loss.item()),
-            "behavior/validation_mean_action_loss": float(mean_action_loss.item()),
+            "behavior/validation_readout_loss": float(readout_loss.item()),
+            "behavior/validation_mean_action_mse": float(mean_action_mse.item()),
             "behavior/generated_action_mean": float(generated.mean().item()),
             "behavior/generated_action_std": float(generated.std().item()),
             "behavior/data_action_mean": float(batch.actions.mean().item()),
@@ -332,7 +336,8 @@ class FlowTRACAgent:
         if self.cfg.actor_mode == "resampled":
             target_actions, metrics = self._resampled_actor_targets(obs)
             result = self.actor.flow_matching_loss(obs, target_actions)
-            mean_target = target_actions
+            readout_loss = self.actor.readout_loss(obs, target_actions)
+            mean_action_mse = self.actor.mean_action_mse(obs, target_actions)
         else:
             candidates, weights, metrics = self._actor_candidates_and_weights(obs)
             batch_size, num_candidates, action_dim = candidates.shape
@@ -346,9 +351,15 @@ class FlowTRACAgent:
                 candidates.reshape(batch_size * num_candidates, action_dim),
                 sample_weight=weights.reshape(-1),
             )
-            mean_target = (weights.unsqueeze(-1) * candidates).sum(dim=1)
-        mean_action_loss = self.actor.mean_action_loss(obs, mean_target)
-        loss = result.loss + self.cfg.deterministic_loss_coef * mean_action_loss
+            flat_candidates = candidates.reshape(batch_size * num_candidates, action_dim)
+            readout_loss = self.actor.readout_loss(
+                repeated_obs,
+                flat_candidates,
+                sample_weight=weights.reshape(-1),
+            )
+            weighted_mean = (weights.unsqueeze(-1) * candidates).sum(dim=1)
+            mean_action_mse = self.actor.mean_action_mse(obs, weighted_mean)
+        loss = result.loss + self.cfg.deterministic_loss_coef * readout_loss
         self.actor_optimizer.zero_grad()
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.cfg.max_grad_norm)
@@ -358,7 +369,8 @@ class FlowTRACAgent:
             {
                 "flow_actor/loss": float(loss.item()),
                 "flow_actor/flow_loss": float(result.loss.item()),
-                "flow_actor/mean_action_loss": float(mean_action_loss.item()),
+                "flow_actor/readout_loss": float(readout_loss.item()),
+                "flow_actor/mean_action_mse": float(mean_action_mse.item()),
                 "flow_actor/path_velocity_norm": float(result.velocity_norm.item()),
                 "flow_actor/target_latent_norm": float(result.latent_norm.item()),
                 "flow_actor/grad_norm": float(grad_norm),
@@ -485,10 +497,11 @@ class FlowTRACAgent:
         incompatible = flow.load_state_dict(state, strict=False)
         missing = set(incompatible.missing_keys)
         unexpected = set(incompatible.unexpected_keys)
-        mean_keys = {name for name in flow.state_dict() if name.startswith("mean_head.")}
-        if unexpected or missing - mean_keys:
+        readout_keys = {name for name in flow.state_dict() if name.startswith("readout.")}
+        legacy_mean_keys = {name for name in unexpected if name.startswith("mean_head.")}
+        if unexpected - legacy_mean_keys or missing - readout_keys:
             raise RuntimeError(
                 f"Incompatible flow checkpoint: missing={sorted(missing)}, "
                 f"unexpected={sorted(unexpected)}"
             )
-        return not missing
+        return not missing and not legacy_mean_keys

@@ -69,7 +69,7 @@ def test_behavior_is_unchanged_after_freeze_and_rl_update():
 
     assert "flow_actor/ess_fraction" in metrics
     assert "flow_actor/flow_loss" in metrics
-    assert "flow_actor/mean_action_loss" in metrics
+    assert "flow_actor/readout_loss" in metrics
     for name, parameter in agent.behavior.named_parameters():
         assert parameter.requires_grad is False
         torch.testing.assert_close(parameter, frozen_parameters[name], rtol=0, atol=0)
@@ -120,7 +120,7 @@ def test_legacy_flow_checkpoint_uses_zero_noise_readout():
     state = agent.state_dict()
     for key in ("behavior", "actor", "actor_ema"):
         state[key] = {
-            name: value for name, value in state[key].items() if not name.startswith("mean_head.")
+            name: value for name, value in state[key].items() if not name.startswith("readout.")
         }
 
     restored = make_agent()

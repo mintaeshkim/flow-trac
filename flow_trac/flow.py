@@ -9,6 +9,9 @@ import torch.nn.functional as F
 
 from flow_trac.models import mlp
 
+LOG_STD_MIN = -5.0
+LOG_STD_MAX = 2.0
+
 
 @dataclass(frozen=True)
 class FlowLoss:
@@ -47,6 +50,49 @@ class ActionTransform(nn.Module):
         return self.center + self.scale * normalized
 
 
+class GaussianReadout(nn.Module):
+    """Squashed-Gaussian projection used only for deterministic control."""
+
+    def __init__(self, obs_dim: int, action_dim: int, hidden_dim: int):
+        super().__init__()
+        self.trunk = nn.Sequential(
+            nn.Linear(obs_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+        )
+        self.mu = nn.Linear(hidden_dim, action_dim)
+        self.log_std = nn.Linear(hidden_dim, action_dim)
+        for layer in self.trunk[::2]:
+            nn.init.constant_(layer.bias, 0.1)
+        for layer in (self.mu, self.log_std):
+            nn.init.uniform_(layer.weight, -1e-3, 1e-3)
+            nn.init.uniform_(layer.bias, -1e-3, 1e-3)
+
+    def parameters_for(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        hidden = self.trunk(obs.float())
+        return self.mu(hidden), self.log_std(hidden).clamp(LOG_STD_MIN, LOG_STD_MAX)
+
+    def loss(
+        self,
+        obs: torch.Tensor,
+        target_latent: torch.Tensor,
+        sample_weight: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        mu, log_std = self.parameters_for(obs)
+        inverse_variance = torch.exp(-2.0 * log_std)
+        per_sample = (
+            0.5 * (target_latent - mu).square() * inverse_variance + log_std
+        ).sum(dim=-1)
+        if sample_weight is None:
+            return per_sample.mean()
+        weight = sample_weight.reshape(-1)
+        weight = weight / weight.sum().clamp_min(1e-8)
+        return (weight * per_sample).sum()
+
+
 class ConditionalFlow(nn.Module):
     """Conditional rectified flow in unconstrained action coordinates."""
 
@@ -62,7 +108,7 @@ class ConditionalFlow(nn.Module):
         self.action_dim = action_dim
         self.action_transform = ActionTransform(action_low, action_high)
         self.velocity = mlp(obs_dim + action_dim + 3, hidden_dim, action_dim)
-        self.mean_head = mlp(obs_dim, hidden_dim, action_dim)
+        self.readout = GaussianReadout(obs_dim, action_dim, hidden_dim)
         self.use_mean_head = True
 
     def forward(
@@ -115,9 +161,19 @@ class ConditionalFlow(nn.Module):
 
     def mean_action(self, obs: torch.Tensor) -> torch.Tensor:
         """Deterministic conditional-mean readout for closed-loop control."""
-        return self.action_transform.from_latent(self.mean_head(obs.float()))
+        mu, _ = self.readout.parameters_for(obs)
+        return self.action_transform.from_latent(mu)
 
-    def mean_action_loss(
+    def readout_loss(
+        self,
+        obs: torch.Tensor,
+        target_action: torch.Tensor,
+        sample_weight: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        target_latent = self.action_transform.to_latent(target_action)
+        return self.readout.loss(obs, target_latent, sample_weight)
+
+    def mean_action_mse(
         self,
         obs: torch.Tensor,
         target_action: torch.Tensor,
