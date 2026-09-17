@@ -31,10 +31,11 @@ video = [
 [project.scripts]
 flow-trac = "flow_trac.train:cli"
 flow-trac-eval = "flow_trac.evaluate:cli"
+trac-kitchen = "trac.train.train_kitchen:cli"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["flow_trac*"]
+include = ["flow_trac*", "trac*"]
 
 [tool.ruff]
 line-length = 100

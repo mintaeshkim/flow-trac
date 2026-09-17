@@ -61,3 +61,13 @@ available explicitly:
 ```bash
 flow-trac --actor-mode resampled
 ```
+
+## Reproduced Gaussian TRAC baseline
+
+The original `offline_rl` Gaussian/GMM TRAC implementation is included as a
+self-contained `trac/` package. Its Kitchen defaults and update rules are kept
+separate from Flow-TRAC so the two implementations can be compared directly.
+
+```bash
+trac-kitchen --cuda
+```
