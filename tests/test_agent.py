@@ -142,12 +142,40 @@ def test_cql_can_use_behavior_candidates_only(monkeypatch):
     batch = make_batch(batch_size=4)
     loss, metrics = agent._cql_loss(
         batch.observations,
+        batch.actions,
         agent.critic_1(batch.observations, batch.actions),
         agent.critic_2(batch.observations, batch.actions),
     )
 
     assert torch.isfinite(loss)
     assert np.isfinite(metrics["critic/cql_loss"])
+    assert metrics["critic/cql_candidate_count"] == 4.0
+
+
+def test_data_action_anchor_bounds_cql_gap():
+    agent = make_agent(
+        cql_alpha=0.1,
+        cql_num_actions=3,
+        cql_temperature=1.0,
+        cql_include_uniform=False,
+        cql_include_data_action=True,
+    )
+    agent.freeze_behavior()
+    batch = make_batch(batch_size=8)
+    q1_data = agent.critic_1(batch.observations, batch.actions)
+    q2_data = agent.critic_2(batch.observations, batch.actions)
+
+    _, metrics = agent._cql_loss(
+        batch.observations,
+        batch.actions,
+        q1_data,
+        q2_data,
+    )
+
+    lower_bound = -np.log(4.0)
+    assert metrics["critic/cql_q1_gap"] >= lower_bound - 1e-6
+    assert metrics["critic/cql_q2_gap"] >= lower_bound - 1e-6
+    assert metrics["critic/cql_gap_lower_bound"] == lower_bound
 
 
 def test_resampled_actor_remains_the_default():

@@ -69,6 +69,7 @@ class Args:
     cql_num_actions: int = 16
     cql_temperature: float = 1.0
     cql_include_uniform: bool = True
+    cql_include_data_action: bool = True
     target_q_clip_min: float | None = 0.0
     target_q_clip_max: float | None = 100.0
     actor_ema_decay: float = 0.995
@@ -261,6 +262,7 @@ def train(args: Args) -> None:
         cql_num_actions=args.cql_num_actions,
         cql_temperature=args.cql_temperature,
         cql_include_uniform=args.cql_include_uniform,
+        cql_include_data_action=args.cql_include_data_action,
         target_q_clip_min=args.target_q_clip_min,
         target_q_clip_max=args.target_q_clip_max,
         actor_ema_decay=args.actor_ema_decay,

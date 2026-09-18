@@ -35,6 +35,7 @@ class FlowTRACConfig:
     cql_num_actions: int = 16
     cql_temperature: float = 1.0
     cql_include_uniform: bool = True
+    cql_include_data_action: bool = True
     target_q_clip_min: float | None = None
     target_q_clip_max: float | None = None
     actor_ema_decay: float = 0.995
@@ -200,6 +201,7 @@ class FlowTRACAgent:
     def _cql_loss(
         self,
         obs: torch.Tensor,
+        data_actions: torch.Tensor,
         q1_data: torch.Tensor,
         q2_data: torch.Tensor,
     ) -> tuple[torch.Tensor, dict[str, float]]:
@@ -217,6 +219,11 @@ class FlowTRACAgent:
                 num_steps=self.cfg.flow_steps,
             )
             candidate_actions = prior_actions
+            if self.cfg.cql_include_data_action:
+                candidate_actions = torch.cat(
+                    (candidate_actions, data_actions.unsqueeze(1)),
+                    dim=1,
+                )
             if self.cfg.cql_include_uniform:
                 uniform_actions = self.behavior.action_transform.uniform(
                     prior_actions.shape,
@@ -246,6 +253,11 @@ class FlowTRACAgent:
             "critic/cql_raw_loss": float(raw_loss.item()),
             "critic/cql_q1_gap": float(q1_gap.mean().item()),
             "critic/cql_q2_gap": float(q2_gap.mean().item()),
+            "critic/cql_candidate_count": float(num_candidates),
+            "critic/cql_gap_lower_bound": float(-temperature * np.log(num_candidates)),
+            "critic/cql_include_data_action": float(self.cfg.cql_include_data_action),
+            "critic/cql_candidate_q1_mean": float(q1.mean().item()),
+            "critic/cql_candidate_q2_mean": float(q2.mean().item()),
         }
 
     def _update_critic(self, batch: Batch) -> dict[str, float]:
@@ -264,7 +276,7 @@ class FlowTRACAgent:
         q1 = self.critic_1(batch.observations, batch.actions)
         q2 = self.critic_2(batch.observations, batch.actions)
         bellman_loss = F.mse_loss(q1, target_q) + F.mse_loss(q2, target_q)
-        cql_loss, cql_metrics = self._cql_loss(batch.observations, q1, q2)
+        cql_loss, cql_metrics = self._cql_loss(batch.observations, batch.actions, q1, q2)
         critic_loss = bellman_loss + cql_loss
 
         self.critic_optimizer.zero_grad()
