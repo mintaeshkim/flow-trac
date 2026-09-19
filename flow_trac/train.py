@@ -46,6 +46,7 @@ class Args:
     # Training phases.
     behavior_pretrain_steps: int = 50_000
     behavior_validation_fraction: float = 0.05
+    behavior_checkpoint_freq: int = 0
     total_updates: int = 1_000_000
     batch_size: int = 256
     critic_warmup_steps: int = 25_000
@@ -219,8 +220,8 @@ def _checkpoint(
 def train(args: Args) -> None:
     if args.behavior_pretrain_steps < 0 or args.total_updates < 0:
         raise ValueError("Training step counts must be non-negative.")
-    if args.log_freq < 1:
-        raise ValueError("log_freq must be positive.")
+    if args.log_freq < 1 or args.behavior_checkpoint_freq < 0:
+        raise ValueError("log_freq must be positive and behavior_checkpoint_freq non-negative.")
     set_seed(args.seed, args.torch_deterministic)
     device = torch.device("cuda" if args.cuda and torch.cuda.is_available() else "cpu")
 
@@ -307,6 +308,9 @@ def train(args: Args) -> None:
     )
     writer = SummaryWriter(os.path.join(args.runs_dir, run_name))
     os.makedirs(writer.log_dir, exist_ok=True)
+    checkpoint_dir = os.path.join(writer.log_dir, "checkpoints")
+    if args.save_model:
+        os.makedirs(checkpoint_dir, exist_ok=True)
     with open(os.path.join(writer.log_dir, "config.json"), "w", encoding="utf-8") as file:
         json.dump(asdict(args), file, indent=2, sort_keys=True)
     writer.add_text("config/dataset_name", args.dataset_name, 0)
@@ -326,6 +330,22 @@ def train(args: Args) -> None:
             validation_batch = offline_dataset.sample(args.batch_size, validation_indices)
             metrics.update(agent.behavior_validation_metrics(validation_batch))
             _write_metrics(writer, metrics, step)
+        if (
+            args.save_model
+            and args.behavior_checkpoint_freq > 0
+            and (step + 1) % args.behavior_checkpoint_freq == 0
+        ):
+            torch.save(
+                _checkpoint(
+                    agent,
+                    config,
+                    args,
+                    observation_mean,
+                    observation_std,
+                    step,
+                ),
+                os.path.join(checkpoint_dir, f"behavior_step_{step + 1}.pt"),
+            )
     agent.freeze_behavior(initialize_actor=True)
     writer.add_scalar("behavior/frozen", 1.0, args.behavior_pretrain_steps)
 
@@ -336,10 +356,6 @@ def train(args: Args) -> None:
         observation_mean,
         observation_std,
     )
-    checkpoint_dir = os.path.join(writer.log_dir, "checkpoints")
-    if args.save_model:
-        os.makedirs(checkpoint_dir, exist_ok=True)
-
     best_return = -float("inf")
     start_time = time.time()
     for step in trange(args.total_updates, desc="Flow-TRAC"):
