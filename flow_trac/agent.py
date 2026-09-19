@@ -41,6 +41,7 @@ class FlowTRACConfig:
     actor_ema_decay: float = 0.995
     advantage_clip: float | None = None
     deterministic_loss_coef: float = 1.0
+    zero_path_loss_coef: float = 1.0
 
 
 class FlowTRACAgent:
@@ -67,6 +68,8 @@ class FlowTRACAgent:
             raise ValueError("actor_ema_decay must be in [0, 1).")
         if config.deterministic_loss_coef < 0.0:
             raise ValueError("deterministic_loss_coef must be non-negative.")
+        if config.zero_path_loss_coef < 0.0:
+            raise ValueError("zero_path_loss_coef must be non-negative.")
 
         self.cfg = config
         self.device = device
@@ -111,33 +114,43 @@ class FlowTRACAgent:
         if self.behavior_frozen or self.behavior_optimizer is None:
             raise RuntimeError("The behavior flow is already frozen.")
         result = self.behavior.flow_matching_loss(batch.observations, batch.actions)
+        zero_path_result = self.behavior.flow_matching_loss(
+            batch.observations,
+            batch.actions,
+            base_noise=torch.zeros_like(batch.actions),
+        )
         readout_loss = self.behavior.readout_loss(batch.observations, batch.actions)
         mean_action_mse = self.behavior.mean_action_mse(batch.observations, batch.actions)
-        loss = result.loss + self.cfg.deterministic_loss_coef * readout_loss
+        loss = (
+            result.loss
+            + self.cfg.zero_path_loss_coef * zero_path_result.loss
+            + self.cfg.deterministic_loss_coef * readout_loss
+        )
         self.behavior_optimizer.zero_grad()
         loss.backward()
-        flow_grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.behavior.velocity.parameters(), self.cfg.max_grad_norm
-        )
-        readout_grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.behavior.readout.parameters(), self.cfg.max_grad_norm
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.behavior.parameters(), self.cfg.max_grad_norm
         )
         self.behavior_optimizer.step()
         return {
             "behavior/loss": float(loss.item()),
             "behavior/flow_loss": float(result.loss.item()),
+            "behavior/zero_path_flow_loss": float(zero_path_result.loss.item()),
             "behavior/readout_loss": float(readout_loss.item()),
             "behavior/mean_action_mse": float(mean_action_mse.item()),
             "behavior/path_velocity_norm": float(result.velocity_norm.item()),
             "behavior/target_latent_norm": float(result.latent_norm.item()),
-            "behavior/grad_norm": float(max(flow_grad_norm, readout_grad_norm)),
-            "behavior/flow_grad_norm": float(flow_grad_norm),
-            "behavior/readout_grad_norm": float(readout_grad_norm),
+            "behavior/grad_norm": float(grad_norm),
         }
 
     @torch.no_grad()
     def behavior_validation_metrics(self, batch: Batch) -> dict[str, float]:
         result = self.behavior.flow_matching_loss(batch.observations, batch.actions)
+        zero_path_result = self.behavior.flow_matching_loss(
+            batch.observations,
+            batch.actions,
+            base_noise=torch.zeros_like(batch.actions),
+        )
         readout_loss = self.behavior.readout_loss(batch.observations, batch.actions)
         mean_action_mse = self.behavior.mean_action_mse(batch.observations, batch.actions)
         generated = self.behavior.sample(
@@ -146,6 +159,7 @@ class FlowTRACAgent:
         ).squeeze(1)
         return {
             "behavior/validation_flow_loss": float(result.loss.item()),
+            "behavior/validation_zero_path_flow_loss": float(zero_path_result.loss.item()),
             "behavior/validation_readout_loss": float(readout_loss.item()),
             "behavior/validation_mean_action_mse": float(mean_action_mse.item()),
             "behavior/generated_action_mean": float(generated.mean().item()),
@@ -353,6 +367,11 @@ class FlowTRACAgent:
         if self.cfg.actor_mode == "resampled":
             target_actions, metrics = self._resampled_actor_targets(obs)
             result = self.actor.flow_matching_loss(obs, target_actions)
+            zero_path_result = self.actor.flow_matching_loss(
+                obs,
+                target_actions,
+                base_noise=torch.zeros_like(target_actions),
+            )
             readout_loss = self.actor.readout_loss(obs, target_actions)
             mean_action_mse = self.actor.mean_action_mse(obs, target_actions)
         else:
@@ -369,6 +388,12 @@ class FlowTRACAgent:
                 sample_weight=weights.reshape(-1),
             )
             flat_candidates = candidates.reshape(batch_size * num_candidates, action_dim)
+            zero_path_result = self.actor.flow_matching_loss(
+                repeated_obs,
+                flat_candidates,
+                sample_weight=weights.reshape(-1),
+                base_noise=torch.zeros_like(flat_candidates),
+            )
             readout_loss = self.actor.readout_loss(
                 repeated_obs,
                 flat_candidates,
@@ -376,28 +401,26 @@ class FlowTRACAgent:
             )
             weighted_mean = (weights.unsqueeze(-1) * candidates).sum(dim=1)
             mean_action_mse = self.actor.mean_action_mse(obs, weighted_mean)
-        loss = result.loss + self.cfg.deterministic_loss_coef * readout_loss
+        loss = (
+            result.loss
+            + self.cfg.zero_path_loss_coef * zero_path_result.loss
+            + self.cfg.deterministic_loss_coef * readout_loss
+        )
         self.actor_optimizer.zero_grad()
         loss.backward()
-        flow_grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.actor.velocity.parameters(), self.cfg.max_grad_norm
-        )
-        readout_grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.actor.readout.parameters(), self.cfg.max_grad_norm
-        )
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.cfg.max_grad_norm)
         self.actor_optimizer.step()
         self._update_actor_ema()
         metrics.update(
             {
                 "flow_actor/loss": float(loss.item()),
                 "flow_actor/flow_loss": float(result.loss.item()),
+                "flow_actor/zero_path_flow_loss": float(zero_path_result.loss.item()),
                 "flow_actor/readout_loss": float(readout_loss.item()),
                 "flow_actor/mean_action_mse": float(mean_action_mse.item()),
                 "flow_actor/path_velocity_norm": float(result.velocity_norm.item()),
                 "flow_actor/target_latent_norm": float(result.latent_norm.item()),
-                "flow_actor/grad_norm": float(max(flow_grad_norm, readout_grad_norm)),
-                "flow_actor/flow_grad_norm": float(flow_grad_norm),
-                "flow_actor/readout_grad_norm": float(readout_grad_norm),
+                "flow_actor/grad_norm": float(grad_norm),
                 "flow_actor/weighted_objective": float(self.cfg.actor_mode == "weighted"),
             }
         )

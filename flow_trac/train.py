@@ -75,6 +75,7 @@ class Args:
     actor_ema_decay: float = 0.995
     advantage_clip: float | None = None
     deterministic_loss_coef: float = 1.0
+    zero_path_loss_coef: float = 1.0
 
     # Evaluation and logging.
     log_freq: int = 1_000
@@ -296,6 +297,7 @@ def train(args: Args) -> None:
         actor_ema_decay=args.actor_ema_decay,
         advantage_clip=args.advantage_clip,
         deterministic_loss_coef=args.deterministic_loss_coef,
+        zero_path_loss_coef=args.zero_path_loss_coef,
     )
     agent = FlowTRACAgent(observation_space, action_space, config, device)
 

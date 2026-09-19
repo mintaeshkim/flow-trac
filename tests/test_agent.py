@@ -70,10 +70,8 @@ def test_behavior_is_unchanged_after_freeze_and_rl_update():
     assert "flow_actor/ess_fraction" in metrics
     assert "flow_actor/flow_loss" in metrics
     assert "flow_actor/readout_loss" in metrics
-    assert "behavior/flow_grad_norm" in pretrain_metrics
-    assert "behavior/readout_grad_norm" in pretrain_metrics
-    assert "flow_actor/flow_grad_norm" in metrics
-    assert "flow_actor/readout_grad_norm" in metrics
+    assert "behavior/zero_path_flow_loss" in pretrain_metrics
+    assert "flow_actor/zero_path_flow_loss" in metrics
     for name, parameter in agent.behavior.named_parameters():
         assert parameter.requires_grad is False
         torch.testing.assert_close(parameter, frozen_parameters[name], rtol=0, atol=0)

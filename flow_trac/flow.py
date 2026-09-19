@@ -129,9 +129,15 @@ class ConditionalFlow(nn.Module):
         obs: torch.Tensor,
         target_action: torch.Tensor,
         sample_weight: torch.Tensor | None = None,
+        base_noise: torch.Tensor | None = None,
     ) -> FlowLoss:
         target_latent = self.action_transform.to_latent(target_action)
-        noise = torch.randn_like(target_latent)
+        if base_noise is None:
+            noise = torch.randn_like(target_latent)
+        else:
+            if base_noise.shape != target_latent.shape:
+                raise ValueError("base_noise must have the same shape as target_action.")
+            noise = base_noise.to(device=obs.device, dtype=obs.dtype)
         time = torch.rand((obs.shape[0], 1), device=obs.device)
         path = (1.0 - time) * noise + time * target_latent
         target_velocity = target_latent - noise
