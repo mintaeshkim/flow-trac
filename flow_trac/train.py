@@ -71,6 +71,9 @@ class Args:
     cql_temperature: float = 1.0
     cql_include_uniform: bool = True
     cql_include_data_action: bool = True
+    cql_include_zero_anchor: bool = True
+    target_include_zero_anchor: bool = True
+    anchor_flow_steps: int = 14
     target_q_clip_min: float | None = 0.0
     target_q_clip_max: float | None = 100.0
     actor_ema_decay: float = 0.995
@@ -84,6 +87,7 @@ class Args:
     num_eval_episodes: int = 10
     eval_policy: str = "actor"
     eval_deterministic: bool = False
+    eval_flow_sampling: Literal["default", "fixed", "zero"] = "default"
     eval_prior_num_candidates: int = 64
     save_model: bool = True
     runs_dir: str = "runs"
@@ -293,6 +297,9 @@ def train(args: Args) -> None:
         cql_temperature=args.cql_temperature,
         cql_include_uniform=args.cql_include_uniform,
         cql_include_data_action=args.cql_include_data_action,
+        cql_include_zero_anchor=args.cql_include_zero_anchor,
+        target_include_zero_anchor=args.target_include_zero_anchor,
+        anchor_flow_steps=args.anchor_flow_steps,
         target_q_clip_min=args.target_q_clip_min,
         target_q_clip_max=args.target_q_clip_max,
         actor_ema_decay=args.actor_ema_decay,
@@ -373,6 +380,7 @@ def train(args: Args) -> None:
                 args.eval_policy,
                 args.eval_deterministic,
                 args.eval_prior_num_candidates,
+                args.eval_flow_sampling,
             )
             _write_metrics(writer, eval_metrics, step)
             print(

@@ -190,6 +190,28 @@ def test_data_action_anchor_bounds_cql_gap():
     assert metrics["critic/cql_q1_gap"] >= lower_bound - 1e-6
     assert metrics["critic/cql_q2_gap"] >= lower_bound - 1e-6
     assert metrics["critic/cql_gap_lower_bound"] == lower_bound
+    assert metrics["critic/cql_include_zero_anchor"] == 1.0
+    assert metrics["critic/cql_prior_candidate_count"] == 3.0
+    assert "critic/cql_zero_anchor_q1" in metrics
+
+
+def test_target_uses_zero_flow_anchor_and_preserves_candidate_count(monkeypatch):
+    agent = make_agent(num_value_samples=4, anchor_flow_steps=7)
+    agent.freeze_behavior()
+    calls = []
+    original = agent.behavior.sample_from_latent
+
+    def record_steps(obs, base_latent, num_steps):
+        calls.append(num_steps)
+        return original(obs, base_latent, num_steps)
+
+    monkeypatch.setattr(agent.behavior, "sample_from_latent", record_steps)
+    _, metrics = agent._target_value(torch.randn(8, 3))
+
+    assert calls == [7, agent.cfg.flow_steps]
+    assert metrics["critic/target_candidate_count"] == 4.0
+    assert metrics["critic/target_include_zero_anchor"] == 1.0
+    assert "critic/target_zero_anchor_q" in metrics
 
 
 def test_resampled_actor_remains_the_default():

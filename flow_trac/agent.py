@@ -36,6 +36,9 @@ class FlowTRACConfig:
     cql_temperature: float = 1.0
     cql_include_uniform: bool = True
     cql_include_data_action: bool = True
+    cql_include_zero_anchor: bool = True
+    target_include_zero_anchor: bool = True
+    anchor_flow_steps: int = 14
     target_q_clip_min: float | None = None
     target_q_clip_max: float | None = None
     actor_ema_decay: float = 0.995
@@ -58,8 +61,8 @@ class FlowTRACAgent:
             raise ValueError("Candidate counts must be positive.")
         if config.actor_mode not in {"resampled", "weighted"}:
             raise ValueError("actor_mode must be resampled or weighted.")
-        if config.flow_steps < 1:
-            raise ValueError("flow_steps must be positive.")
+        if config.flow_steps < 1 or config.anchor_flow_steps < 1:
+            raise ValueError("flow_steps and anchor_flow_steps must be positive.")
         if config.cql_alpha < 0.0 or config.cql_num_actions < 1:
             raise ValueError("CQL alpha must be non-negative and its action count positive.")
         if config.cql_temperature <= 0.0:
@@ -201,21 +204,49 @@ class FlowTRACAgent:
         return torch.minimum(q1, q2).reshape(batch_size, num_candidates)
 
     @torch.no_grad()
+    def _behavior_zero_action(self, obs: torch.Tensor) -> torch.Tensor:
+        base_latent = torch.zeros(
+            (obs.shape[0], self.behavior.action_dim),
+            dtype=obs.dtype,
+            device=obs.device,
+        )
+        return self.behavior.sample_from_latent(
+            obs,
+            base_latent,
+            num_steps=self.cfg.anchor_flow_steps,
+        ).squeeze(1)
+
+    @torch.no_grad()
     def _target_value(self, next_obs: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
-        actions = self.behavior.sample(
-            next_obs,
-            num_samples=self.cfg.num_value_samples,
-            num_steps=self.cfg.flow_steps,
-        )
+        include_anchor = self.cfg.target_include_zero_anchor
+        num_stochastic = self.cfg.num_value_samples - int(include_anchor)
+        candidate_actions = []
+        if include_anchor:
+            candidate_actions.append(self._behavior_zero_action(next_obs).unsqueeze(1))
+        if num_stochastic > 0:
+            candidate_actions.append(
+                self.behavior.sample(
+                    next_obs,
+                    num_samples=num_stochastic,
+                    num_steps=self.cfg.flow_steps,
+                )
+            )
+        actions = torch.cat(candidate_actions, dim=1)
         q = self._candidate_q(next_obs, actions, target=True)
+        num_candidates = actions.shape[1]
         value = self.cfg.lambda_ * (
-            torch.logsumexp(q / self.cfg.lambda_, dim=1) - np.log(self.cfg.num_value_samples)
+            torch.logsumexp(q / self.cfg.lambda_, dim=1) - np.log(num_candidates)
         )
-        return value.unsqueeze(-1), {
+        metrics = {
             "critic/target_value": float(value.mean().item()),
             "critic/target_candidate_q_mean": float(q.mean().item()),
             "critic/target_candidate_q_std": float(q.std(unbiased=False).item()),
+            "critic/target_candidate_count": float(num_candidates),
+            "critic/target_include_zero_anchor": float(include_anchor),
         }
+        if include_anchor:
+            metrics["critic/target_zero_anchor_q"] = float(q[:, 0].mean().item())
+        return value.unsqueeze(-1), metrics
 
     def _cql_loss(
         self,
@@ -232,11 +263,20 @@ class FlowTRACAgent:
             }
 
         with torch.no_grad():
-            prior_actions = self.behavior.sample(
-                obs,
-                num_samples=self.cfg.cql_num_actions,
-                num_steps=self.cfg.flow_steps,
-            )
+            include_anchor = self.cfg.cql_include_zero_anchor
+            num_stochastic = self.cfg.cql_num_actions - int(include_anchor)
+            prior_candidates = []
+            if include_anchor:
+                prior_candidates.append(self._behavior_zero_action(obs).unsqueeze(1))
+            if num_stochastic > 0:
+                prior_candidates.append(
+                    self.behavior.sample(
+                        obs,
+                        num_samples=num_stochastic,
+                        num_steps=self.cfg.flow_steps,
+                    )
+                )
+            prior_actions = torch.cat(prior_candidates, dim=1)
             candidate_actions = prior_actions
             if self.cfg.cql_include_data_action:
                 candidate_actions = torch.cat(
@@ -267,7 +307,7 @@ class FlowTRACAgent:
         q2_gap = q2_lme - q2_data.squeeze(-1)
         raw_loss = q1_gap.mean() + q2_gap.mean()
         loss = self.cfg.cql_alpha * raw_loss
-        return loss, {
+        metrics = {
             "critic/cql_loss": float(loss.item()),
             "critic/cql_raw_loss": float(raw_loss.item()),
             "critic/cql_q1_gap": float(q1_gap.mean().item()),
@@ -275,9 +315,15 @@ class FlowTRACAgent:
             "critic/cql_candidate_count": float(num_candidates),
             "critic/cql_gap_lower_bound": float(-temperature * np.log(num_candidates)),
             "critic/cql_include_data_action": float(self.cfg.cql_include_data_action),
+            "critic/cql_include_zero_anchor": float(self.cfg.cql_include_zero_anchor),
+            "critic/cql_prior_candidate_count": float(prior_actions.shape[1]),
             "critic/cql_candidate_q1_mean": float(q1.mean().item()),
             "critic/cql_candidate_q2_mean": float(q2.mean().item()),
         }
+        if self.cfg.cql_include_zero_anchor:
+            metrics["critic/cql_zero_anchor_q1"] = float(q1[:, 0].mean().item())
+            metrics["critic/cql_zero_anchor_q2"] = float(q2[:, 0].mean().item())
+        return loss, metrics
 
     def _update_critic(self, batch: Batch) -> dict[str, float]:
         with torch.no_grad():
