@@ -116,23 +116,47 @@ def evaluate(
     policy: str,
     deterministic: bool,
     prior_num_candidates: int,
+    flow_sampling: str = "default",
 ) -> dict[str, float]:
     policy = policy.replace("-", "_")
     if policy not in {"actor", "prior", "prior_resample"}:
         raise ValueError("eval_policy must be actor, prior, or prior_resample.")
-    returns, lengths, actions, task_counts = [], [], [], []
+    if flow_sampling not in {"default", "fixed", "zero"}:
+        raise ValueError("flow_sampling must be default, fixed, or zero.")
+    if policy == "prior_resample" and flow_sampling != "default":
+        raise ValueError("fixed and zero flow sampling support actor and prior policies only.")
+    returns, lengths, actions, action_deltas, task_counts = [], [], [], [], []
+    latent_rng = np.random.default_rng(seed)
     for episode_index in range(num_episodes):
         observation, _ = env.reset(seed=seed + episode_index)
         terminated = truncated = False
         episode_return = 0.0
         episode_length = 0
         completed_tasks: set[str] = set()
+        previous_action = None
+        if flow_sampling == "fixed":
+            base_latent = latent_rng.standard_normal(
+                int(np.prod(agent.action_shape)),
+                dtype=np.float32,
+            )
+        elif flow_sampling == "zero":
+            base_latent = np.zeros(int(np.prod(agent.action_shape)), dtype=np.float32)
+        else:
+            base_latent = None
         while not (terminated or truncated):
             observation_array = np.asarray(observation, dtype=np.float32)
             if policy == "actor":
-                action = agent.act(observation_array, deterministic=deterministic)
+                action = agent.act(
+                    observation_array,
+                    deterministic=deterministic,
+                    base_latent=base_latent,
+                )
             elif policy == "prior":
-                action = agent.act_prior(observation_array, deterministic=deterministic)
+                action = agent.act_prior(
+                    observation_array,
+                    deterministic=deterministic,
+                    base_latent=base_latent,
+                )
             else:
                 action = agent.act_prior_resampled(
                     observation_array,
@@ -141,6 +165,9 @@ def evaluate(
                 )
             observation, reward, terminated, truncated, info = env.step(action)
             actions.append(action)
+            if previous_action is not None:
+                action_deltas.append(float(np.linalg.norm(action - previous_action)))
+            previous_action = action
             episode_return += float(reward)
             episode_length += 1
             completed_tasks.update(_completed_tasks(info))
@@ -156,6 +183,7 @@ def evaluate(
         "eval/action_std": float(action_array.std()),
         "eval/action_min": float(action_array.min()),
         "eval/action_max": float(action_array.max()),
+        "eval/action_delta_l2": float(np.mean(action_deltas)) if action_deltas else 0.0,
         "eval/completed_tasks": float(np.mean(task_counts)),
     }
 

@@ -181,6 +181,50 @@ class ConditionalFlow(nn.Module):
         return F.mse_loss(self.mean_action(obs), target_action)
 
     @torch.no_grad()
+    def sample_from_latent(
+        self,
+        obs: torch.Tensor,
+        base_latent: torch.Tensor,
+        num_steps: int = 8,
+    ) -> torch.Tensor:
+        """Transport caller-provided base noise through the conditional flow."""
+        if num_steps < 1:
+            raise ValueError("num_steps must be >= 1.")
+        if base_latent.ndim == 2:
+            base_latent = base_latent.unsqueeze(1)
+        if base_latent.ndim != 3:
+            raise ValueError(
+                "base_latent must have shape [batch, action] or [batch, sample, action]."
+            )
+        if base_latent.shape[0] != obs.shape[0]:
+            raise ValueError("base_latent and obs must have the same batch size.")
+        if base_latent.shape[-1] != self.action_dim:
+            raise ValueError("base_latent has the wrong action dimension.")
+
+        batch_size, num_samples, _ = base_latent.shape
+        obs_dim = obs.shape[-1]
+        repeated_obs = (
+            obs[:, None, :]
+            .expand(batch_size, num_samples, obs_dim)
+            .reshape(batch_size * num_samples, obs_dim)
+        )
+        latent = base_latent.to(device=obs.device, dtype=obs.dtype).reshape(
+            batch_size * num_samples,
+            self.action_dim,
+        )
+        step_size = 1.0 / num_steps
+        for step in range(num_steps):
+            time = torch.full(
+                (latent.shape[0], 1),
+                step * step_size,
+                device=obs.device,
+            )
+            latent = latent + step_size * self(repeated_obs, latent, time)
+
+        action = self.action_transform.from_latent(latent)
+        return action.reshape(batch_size, num_samples, self.action_dim)
+
+    @torch.no_grad()
     def sample(
         self,
         obs: torch.Tensor,
@@ -193,34 +237,18 @@ class ConditionalFlow(nn.Module):
         if num_steps < 1:
             raise ValueError("num_steps must be >= 1.")
 
-        batch_size, obs_dim = obs.shape
-        repeated_obs = (
-            obs[:, None, :]
-            .expand(batch_size, num_samples, obs_dim)
-            .reshape(batch_size * num_samples, obs_dim)
-        )
+        batch_size = obs.shape[0]
         if deterministic and self.use_mean_head:
             action = self.mean_action(obs)
             return action[:, None, :].expand(batch_size, num_samples, self.action_dim)
         if deterministic:
-            latent = torch.zeros(
-                (batch_size * num_samples, self.action_dim),
+            base_latent = torch.zeros(
+                (batch_size, num_samples, self.action_dim),
                 device=obs.device,
             )
         else:
-            latent = torch.randn(
-                (batch_size * num_samples, self.action_dim),
+            base_latent = torch.randn(
+                (batch_size, num_samples, self.action_dim),
                 device=obs.device,
             )
-
-        step_size = 1.0 / num_steps
-        for step in range(num_steps):
-            time = torch.full(
-                (latent.shape[0], 1),
-                step * step_size,
-                device=obs.device,
-            )
-            latent = latent + step_size * self(repeated_obs, latent, time)
-
-        action = self.action_transform.from_latent(latent)
-        return action.reshape(batch_size, num_samples, self.action_dim)
+        return self.sample_from_latent(obs, base_latent, num_steps=num_steps)

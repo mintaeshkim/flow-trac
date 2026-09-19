@@ -116,8 +116,11 @@ class FlowTRACAgent:
         loss = result.loss + self.cfg.deterministic_loss_coef * readout_loss
         self.behavior_optimizer.zero_grad()
         loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.behavior.parameters(), self.cfg.max_grad_norm
+        flow_grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.behavior.velocity.parameters(), self.cfg.max_grad_norm
+        )
+        readout_grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.behavior.readout.parameters(), self.cfg.max_grad_norm
         )
         self.behavior_optimizer.step()
         return {
@@ -127,7 +130,9 @@ class FlowTRACAgent:
             "behavior/mean_action_mse": float(mean_action_mse.item()),
             "behavior/path_velocity_norm": float(result.velocity_norm.item()),
             "behavior/target_latent_norm": float(result.latent_norm.item()),
-            "behavior/grad_norm": float(grad_norm),
+            "behavior/grad_norm": float(max(flow_grad_norm, readout_grad_norm)),
+            "behavior/flow_grad_norm": float(flow_grad_norm),
+            "behavior/readout_grad_norm": float(readout_grad_norm),
         }
 
     @torch.no_grad()
@@ -374,7 +379,12 @@ class FlowTRACAgent:
         loss = result.loss + self.cfg.deterministic_loss_coef * readout_loss
         self.actor_optimizer.zero_grad()
         loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.cfg.max_grad_norm)
+        flow_grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.actor.velocity.parameters(), self.cfg.max_grad_norm
+        )
+        readout_grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.actor.readout.parameters(), self.cfg.max_grad_norm
+        )
         self.actor_optimizer.step()
         self._update_actor_ema()
         metrics.update(
@@ -385,7 +395,9 @@ class FlowTRACAgent:
                 "flow_actor/mean_action_mse": float(mean_action_mse.item()),
                 "flow_actor/path_velocity_norm": float(result.velocity_norm.item()),
                 "flow_actor/target_latent_norm": float(result.latent_norm.item()),
-                "flow_actor/grad_norm": float(grad_norm),
+                "flow_actor/grad_norm": float(max(flow_grad_norm, readout_grad_norm)),
+                "flow_actor/flow_grad_norm": float(flow_grad_norm),
+                "flow_actor/readout_grad_norm": float(readout_grad_norm),
                 "flow_actor/weighted_objective": float(self.cfg.actor_mode == "weighted"),
             }
         )
@@ -417,13 +429,24 @@ class FlowTRACAgent:
         self,
         observation: np.ndarray,
         deterministic: bool = False,
+        base_latent: np.ndarray | None = None,
     ) -> np.ndarray:
         obs, squeeze = self._obs_tensor(observation)
-        actions = self.actor_ema.sample(
-            obs,
-            num_steps=self.cfg.flow_steps,
-            deterministic=deterministic,
-        ).squeeze(1)
+        if base_latent is None:
+            actions = self.actor_ema.sample(
+                obs,
+                num_steps=self.cfg.flow_steps,
+                deterministic=deterministic,
+            ).squeeze(1)
+        else:
+            latent = torch.as_tensor(base_latent, dtype=torch.float32, device=self.device)
+            if latent.ndim == 1:
+                latent = latent.unsqueeze(0)
+            actions = self.actor_ema.sample_from_latent(
+                obs,
+                latent,
+                num_steps=self.cfg.flow_steps,
+            ).squeeze(1)
         result = actions.cpu().numpy().astype(np.float32)
         if squeeze:
             return result[0].reshape(self.action_shape)
@@ -434,13 +457,24 @@ class FlowTRACAgent:
         self,
         observation: np.ndarray,
         deterministic: bool = False,
+        base_latent: np.ndarray | None = None,
     ) -> np.ndarray:
         obs, squeeze = self._obs_tensor(observation)
-        actions = self.behavior.sample(
-            obs,
-            num_steps=self.cfg.flow_steps,
-            deterministic=deterministic,
-        ).squeeze(1)
+        if base_latent is None:
+            actions = self.behavior.sample(
+                obs,
+                num_steps=self.cfg.flow_steps,
+                deterministic=deterministic,
+            ).squeeze(1)
+        else:
+            latent = torch.as_tensor(base_latent, dtype=torch.float32, device=self.device)
+            if latent.ndim == 1:
+                latent = latent.unsqueeze(0)
+            actions = self.behavior.sample_from_latent(
+                obs,
+                latent,
+                num_steps=self.cfg.flow_steps,
+            ).squeeze(1)
         result = actions.cpu().numpy().astype(np.float32)
         if squeeze:
             return result[0].reshape(self.action_shape)

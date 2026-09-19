@@ -31,6 +31,25 @@ def test_flow_sample_shape_and_bounds():
     assert torch.all(samples[..., 1] <= 5.0)
 
 
+def test_flow_can_reuse_caller_provided_latent():
+    flow = ConditionalFlow(
+        obs_dim=3,
+        action_dim=2,
+        action_low=-np.ones(2, dtype=np.float32),
+        action_high=np.ones(2, dtype=np.float32),
+        hidden_dim=16,
+    )
+    observations = torch.randn(5, 3)
+    base_latent = torch.randn(5, 2)
+
+    first = flow.sample_from_latent(observations, base_latent, num_steps=3)
+    torch.randn(100)
+    second = flow.sample_from_latent(observations, base_latent, num_steps=3)
+
+    assert first.shape == (5, 1, 2)
+    torch.testing.assert_close(first, second)
+
+
 def test_flow_matching_loss_updates_parameters():
     flow = ConditionalFlow(
         obs_dim=3,

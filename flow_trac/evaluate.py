@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import gymnasium as gym
 import minari
@@ -25,6 +25,7 @@ class Args:
     deterministic: bool | None = None
     prior_num_candidates: int | None = None
     flow_steps: int | None = None
+    flow_sampling: Literal["default", "fixed", "zero"] = "default"
     cuda: bool = True
     video_dir: str | None = None
     num_videos: int = 1
@@ -111,6 +112,7 @@ def run(args: Args) -> dict[str, float]:
         policy=policy,
         deterministic=deterministic,
         prior_num_candidates=prior_num_candidates,
+        flow_sampling=args.flow_sampling,
     )
     env.close()
 
@@ -124,6 +126,7 @@ def run(args: Args) -> dict[str, float]:
         "policy": policy,
         "deterministic": deterministic,
         "flow_steps": config.flow_steps,
+        "flow_sampling": args.flow_sampling,
         **metrics,
     }
     if video_dir is not None:

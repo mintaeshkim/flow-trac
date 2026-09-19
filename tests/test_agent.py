@@ -60,7 +60,7 @@ def test_behavior_is_unchanged_after_freeze_and_rl_update():
     torch.manual_seed(0)
     agent = make_agent()
     batch = make_batch()
-    agent.pretrain_behavior(batch)
+    pretrain_metrics = agent.pretrain_behavior(batch)
     agent.freeze_behavior()
     frozen_parameters = {
         name: parameter.detach().clone() for name, parameter in agent.behavior.named_parameters()
@@ -70,6 +70,10 @@ def test_behavior_is_unchanged_after_freeze_and_rl_update():
     assert "flow_actor/ess_fraction" in metrics
     assert "flow_actor/flow_loss" in metrics
     assert "flow_actor/readout_loss" in metrics
+    assert "behavior/flow_grad_norm" in pretrain_metrics
+    assert "behavior/readout_grad_norm" in pretrain_metrics
+    assert "flow_actor/flow_grad_norm" in metrics
+    assert "flow_actor/readout_grad_norm" in metrics
     for name, parameter in agent.behavior.named_parameters():
         assert parameter.requires_grad is False
         torch.testing.assert_close(parameter, frozen_parameters[name], rtol=0, atol=0)
@@ -129,6 +133,18 @@ def test_legacy_flow_checkpoint_uses_zero_noise_readout():
     assert restored.behavior.use_mean_head is False
     assert restored.actor.use_mean_head is False
     assert restored.actor_ema.use_mean_head is False
+
+
+def test_prior_action_can_reuse_fixed_latent():
+    agent = make_agent()
+    observation = np.zeros(3, dtype=np.float32)
+    base_latent = np.array([0.5, -0.25], dtype=np.float32)
+
+    first = agent.act_prior(observation, base_latent=base_latent)
+    torch.randn(100)
+    second = agent.act_prior(observation, base_latent=base_latent)
+
+    np.testing.assert_allclose(first, second)
 
 
 def test_cql_can_use_behavior_candidates_only(monkeypatch):
